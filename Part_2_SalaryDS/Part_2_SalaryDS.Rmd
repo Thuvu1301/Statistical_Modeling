@@ -1,7 +1,8 @@
 # Part 2: Mức lương ở các vị trí việc làm trong lĩnh vực khoa học dữ liệu
 
 ```{r p2-setup, include=FALSE}
-source("../config/setup.R")
+if (!requireNamespace("here", quietly = TRUE)) install.packages("here")
+source(here::here("config", "setup.R"))
 knitr::opts_chunk$set(fig.align = "center")
 ```
 
@@ -11,7 +12,7 @@ knitr::opts_chunk$set(fig.align = "center")
 607 quan trắc, 11 biến — xem mô tả biến trong đề bài.)*
 
 ```{r p2-load-data}
-salary_raw <- read.csv("data/raw/ds_salaries.csv")
+salary_raw <- read.csv(here::here("Part_2_SalaryDS", "data", "raw", "ds_salaries.csv"))
 dim(salary_raw)
 str(salary_raw)
 ```

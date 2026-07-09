@@ -1,7 +1,8 @@
 # Part 3: [TODO: Tên đề tài] — Bộ dữ liệu tự chọn
 
 ```{r p3-setup, include=FALSE}
-source("../config/setup.R")
+if (!requireNamespace("here", quietly = TRUE)) install.packages("here")
+source(here::here("config", "setup.R"))
 knitr::opts_chunk$set(fig.align = "center")
 ```
 
@@ -15,7 +16,7 @@ Job Salaries đã dùng ở Part 1, Part 2.)*
 
 ```{r p3-load-data}
 # TODO: đặt file dữ liệu vào Part_3_FreeChoice/data/raw/ rồi đọc vào đây
-# df <- read.csv("data/raw/<ten_file>.csv")
+# df <- read.csv(here::here("Part_3_FreeChoice", "data", "raw", "<ten_file>.csv"))
 ```
 
 ## 3.2. Tiền xử lý và khám phá dữ liệu (EDA)

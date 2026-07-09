@@ -1,10 +1,10 @@
 ---
 title: "Đồ án kết thúc học phần"
 author:
-  - "[TODO: Họ tên thành viên 1]"
-  - "[TODO: Họ tên thành viên 2]"
-  - "[TODO: Họ tên thành viên 3]"
-date: "`r format(Sys.Date(), '%d/%m/%Y')`"
+  - "Vũ Hà Thư"
+  - "Nguyễn Đình Mai Vi"
+  - "Trần Việt Hà"
+date: "07/2026"
 
 output:
   pdf_document:
@@ -43,6 +43,12 @@ editor_options:
 ---
 
 ```{r setup, include=FALSE}
+# "here" xac dinh thu muc goc repo (noi co .git) bat ke working directory
+# hien tai la gi, giup duong dan toi cac child document va du lieu on dinh
+# du phien R co bi anh huong boi trang thai cu (vd chay chunk tuong tac
+# truoc do) hay khong.
+if (!requireNamespace("here", quietly = TRUE)) install.packages("here")
+
 knitr::opts_chunk$set(
   echo = TRUE,
   message = FALSE,
@@ -98,17 +104,17 @@ knitr::opts_chunk$set(
 \newpage
 ```
 
-```{r child="Part_1_CommunityCrime/Part_1_CommunityCrime.Rmd"}
+```{r child=here::here("Part_1_CommunityCrime", "Part_1_CommunityCrime.Rmd")}
 ```
 
 \newpage
 
-```{r child="Part_2_SalaryDS/Part_2_SalaryDS.Rmd"}
+```{r child=here::here("Part_2_SalaryDS", "Part_2_SalaryDS.Rmd")}
 ```
 
 \newpage
 
-```{r child="Part_3_FreeChoice/Part_3_FreeChoice.Rmd"}
+```{r child=here::here("Part_3_FreeChoice", "Part_3_FreeChoice.Rmd")}
 ```
 
 # Tài liệu tham khảo

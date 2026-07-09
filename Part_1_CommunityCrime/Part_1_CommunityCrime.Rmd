@@ -1,7 +1,9 @@
 # Part 1: Dự đoán tỷ lệ tội phạm bạo lực trong các cộng đồng (Communities and Crime)
 
 ```{r p1-setup, include=FALSE}
-source("../config/setup.R")
+if (!requireNamespace("here", quietly = TRUE)) install.packages("here")
+source(here::here("config", "setup.R"))
+if (!requireNamespace("psych", quietly = TRUE)) install.packages("psych")
 library(psych)
 knitr::opts_chunk$set(fig.align = "center")
 ```
@@ -15,12 +17,12 @@ knitr::opts_chunk$set(fig.align = "center")
 ## 1.2. Đọc dữ liệu và khám phá dữ liệu (EDA)
 
 ```{r p1-load-data}
-names_file <- readLines("data/raw/communities.names")
+names_file <- readLines(here::here("Part_1_CommunityCrime", "data", "raw", "communities.names"))
 attr_lines <- grep("^@attribute", names_file, value = TRUE)
 col_names  <- sub("^@attribute\\s+(\\S+).*$", "\\1", attr_lines)
 
 crime_raw <- read.csv(
-  "data/raw/communities.data",
+  here::here("Part_1_CommunityCrime", "data", "raw", "communities.data"),
   header = FALSE, na.strings = "?", col.names = col_names
 )
 

@@ -28,9 +28,11 @@ Statistical_Modeling/
 
 ## Cách chạy
 
-1. Mở R/RStudio tại thư mục gốc `Statistical_Modeling/` (working directory = thư mục chứa `main.Rmd`).
-2. Cài đặt các package cần thiết (tự động cài khi `source("config/setup.R")` nếu thiếu):
-   `tidyverse`, `corrplot`, `GGally`, `caret`, `glmnet`, `pls`, `leaps`, `scales`, `knitr`, `kableExtra`, `psych`.
+1. Mở project tại thư mục gốc `Statistical_Modeling/` (repo có `.git`, package `here` sẽ tự
+   nhận diện thư mục gốc này để tìm dữ liệu — không phụ thuộc working directory hiện tại).
+2. Cài đặt các package cần thiết (tự động cài khi `source(here::here("config", "setup.R"))`
+   nếu thiếu): `here`, `tidyverse`, `corrplot`, `GGally`, `caret`, `glmnet`, `pls`, `leaps`,
+   `scales`, `knitr`, `kableExtra`, `psych`.
 3. Render toàn bộ báo cáo (3 part gộp thành 1 file):
    ```r
    rmarkdown::render("main.Rmd", output_format = "pdf_document")
@@ -38,6 +40,12 @@ Statistical_Modeling/
    Cần cài TeX (khuyến nghị `tinytex::install_tinytex()`) để xuất PDF với `xelatex`.
 4. Mỗi `Part_X.Rmd` là **child document** (không có YAML riêng) nên không tự render độc lập được;
    phải render qua `main.Rmd`.
+
+**Lỗi thường gặp:** nếu Knit báo `Error in file() : cannot open the connection` khi
+`source(...)`, hãy **restart R session** rồi Knit lại (Session cũ có thể đang giữ working
+directory bị lệch do trước đó đã chạy chunk tương tác trong 1 file con). Toàn bộ đường dẫn
+trong repo đã dùng `here::here(...)` nên về nguyên tắc không phụ thuộc working directory,
+nhưng restart session vẫn là cách nhanh nhất để loại bỏ trạng thái cũ nếu gặp lỗi lạ.
 
 ## Trạng thái từng Part
 

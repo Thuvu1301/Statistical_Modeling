@@ -1,8 +1,18 @@
 # Cau hinh dung chung cho ca 3 Part (Statistical_Modeling)
-# Duoc goi bang: source("config/setup.R") tu file .Rmd cua tung Part,
-# hoac source(here::here("config", "setup.R")) neu chay tu thu muc con.
+# Duoc goi bang: source(here::here("config", "setup.R")) tu file .Rmd cua tung Part.
+#
+# Dung goi "here" de xac dinh thu muc goc cua repo (noi co .git) thay vi dua
+# vao working directory hien tai: rmarkdown/knitr khi xu ly child document co
+# the doi working directory tuy theo trang thai phien R (session cu con sot
+# lai opts_knit$root.dir tu luc chay chunk tuong tac se lam sai duong dan
+# tuong doi thong thuong). here::here() luon tra ve dung goc repo bat ke
+# working directory hien tai la gi, nen moi duong dan doc du lieu trong cac
+# Part_X.Rmd nen dung here::here(...) thay vi string tuong doi.
+
+if (!requireNamespace("here", quietly = TRUE)) install.packages("here")
 
 packages <- c(
+  "here",        # xac dinh thu muc goc repo, khong phu thuoc working directory
   "tidyverse",   # doc/xu ly du lieu, ggplot2
   "corrplot",    # ma tran tuong quan
   "GGally",      # bieu do cap doi (pairs plot)
