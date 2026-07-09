@@ -8,7 +8,7 @@ date: "07/2026"
 
 output:
   pdf_document:
-    toc: true
+    toc: false
     toc_depth: 2
     number_sections: true
     latex_engine: xelatex
@@ -36,6 +36,7 @@ header-includes:
   - \usepackage{graphicx}
   - \let\maketitle\relax
   - \renewcommand{\contentsname}{Mục lục}
+  - \setcounter{tocdepth}{2}
 
 editor_options:
   markdown:

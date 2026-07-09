@@ -50,11 +50,9 @@ nhưng restart session vẫn là cách nhanh nhất để loại bỏ trạng th
 ## Trạng thái từng Part
 
 - **Part 1 — Communities and Crime**: đã tải sẵn dữ liệu gốc, dựng khung code đầy đủ các bước
-  (EDA, tiền xử lý, PCR có kiểm tra KMO/Bartlett + chọn số PC bằng CV, OLS, Ridge, LASSO, so sánh
-  RMSE/MAE/R², loadings, quy đổi hệ số PCR về biến gốc). Các phần diễn giải còn đánh dấu `TODO`.
-- **Part 2 — Data Science Job Salaries**: đã copy sẵn `ds_salaries.csv`, dựng khung EDA + tiền xử
-  lý + mô hình dự đoán lương. Cần bổ sung: gộp nhóm `job_title`, chọn phương pháp so sánh nhóm,
-  hoàn thiện mô hình và diễn giải.
+Bổ sung các phần `TODO`
+- **Part 2 — Data Science Job Salaries**: đã copy sẵn `ds_salaries.csv`, dựng khung code đầy đủ các bước
+Bổ sung các phần `TODO`
 - **Part 3 — Bộ dữ liệu tự chọn**: mới có khung sườn (chưa gắn dữ liệu). Cần: chọn đề tài + bộ dữ
   liệu (≥ 8 biến, không trùng Part 1/2), đặt file vào `Part_3_FreeChoice/data/raw/`, rồi điền vào
   các mục còn `TODO` trong `Part_3_FreeChoice.Rmd`.

@@ -6,7 +6,7 @@ source(here::here("config", "setup.R"))
 knitr::opts_chunk$set(fig.align = "center")
 ```
 
-## 3.1. Giới thiệu đề tài và bộ dữ liệu
+## Giới thiệu đề tài và bộ dữ liệu
 
 *(TODO: tên đề tài, mục tiêu nghiên cứu/phân tích, nguồn gốc bộ dữ liệu
 (Kaggle/UCI/EU Open Data/data.gov/Statista/...), mô tả ý nghĩa các biến
@@ -19,7 +19,7 @@ Job Salaries đã dùng ở Part 1, Part 2.)*
 # df <- read.csv(here::here("Part_3_FreeChoice", "data", "raw", "<ten_file>.csv"))
 ```
 
-## 3.2. Tiền xử lý và khám phá dữ liệu (EDA)
+## Tiền xử lý và khám phá dữ liệu (EDA)
 
 *(TODO: xử lý dữ liệu khuyết, ngoại lệ, mã hóa biến phân loại, chuẩn hóa dữ
 liệu nếu cần; thống kê mô tả và trực quan hóa dữ liệu.)*
@@ -30,7 +30,7 @@ liệu nếu cần; thống kê mô tả và trực quan hóa dữ liệu.)*
 ```{r p3-eda}
 ```
 
-## 3.3. Xây dựng mô hình
+## Xây dựng mô hình
 
 *(TODO: chọn phương pháp phù hợp với mục tiêu phân tích — OLS, PCR, Ridge,
 LASSO, Elastic-Net, ANOVA một/nhiều nhân tố, hoặc mô hình thống kê khác đã
@@ -44,7 +44,7 @@ học.)*
 # TODO: xây dựng mô hình
 ```
 
-## 3.4. Đánh giá mô hình
+## Đánh giá mô hình
 
 *(TODO: kiểm tra giả định mô hình (nếu có); đánh giá bằng chỉ số phù hợp
 (RMSE, MAE, R2, Accuracy, AIC, BIC, ...); so sánh và chọn mô hình phù hợp
@@ -53,10 +53,10 @@ nhất nếu xây dựng nhiều mô hình.)*
 ```{r p3-evaluate}
 ```
 
-## 3.5. Phân tích và diễn giải kết quả
+## Phân tích và diễn giải kết quả
 
 *(TODO: diễn giải ý nghĩa kết quả, trả lời mục tiêu nghiên cứu đã đặt ra.)*
 
-## 3.6. Đề xuất và kết luận
+## Đề xuất và kết luận
 
 *(TODO: đề xuất hướng cải thiện mô hình/phương pháp; kết luận của nhóm.)*
