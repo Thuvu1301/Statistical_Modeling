@@ -1,1 +1,20 @@
+<!--
+## Giới thiệu bộ dữ liệu
 
+*(TODO: giới thiệu nguồn dữ liệu "Data Science Job Salaries" (Kaggle),
+607 quan trắc, 11 biến — xem mô tả biến trong đề bài.)*
+
+```{r p2-load-data}
+# TODO: doc du lieu, vi du:
+# salary_raw <- read.csv(here::here("Part_2_SalaryDS", "data", "raw", "ds_salaries.csv"))
+```
+
+## Tiền xử lý dữ liệu
+
+*(TODO: xử lý dữ liệu khuyết (nếu có), mã hóa biến phân loại, gộp nhóm
+`job_title` thành các nhóm hợp lý (vd: DA, DS, DE, ML, Manager, Khác, ...),
+loại bỏ cột chỉ số dòng không dùng.)*
+
+```{r p2-preprocess}
+``` 
+-->
