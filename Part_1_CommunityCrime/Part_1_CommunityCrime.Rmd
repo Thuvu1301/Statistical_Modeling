@@ -6,92 +6,14 @@ source(here::here("config", "setup.R"))
 knitr::opts_chunk$set(fig.align = "center")
 ```
 
-## Giới thiệu bộ dữ liệu
-
-*(TODO: giới thiệu nguồn dữ liệu UCI Communities and Crime, 1994 quan sát,
-128 biến gồm 4 biến định danh + fold, 122 biến giải thích, 1 biến phản hồi
-`ViolentCrimesPerPop`.)*
-
-## Đọc dữ liệu và khám phá dữ liệu (EDA)
-
-```{r p1-load-data}
-# TODO: doc du lieu, vi du:
-# crime_raw <- read.csv(
-#   here::here("Part_1_CommunityCrime", "data", "raw", "communities.data"),
-#   header = FALSE, na.strings = "?"
-# )
+```{r child=here::here("Part_1_CommunityCrime","Part_1_CommunityCrime_ABCD.Rmd")}
 ```
 
-```{r p1-eda}
-# TODO: thong ke mo ta, phan phoi bien phan hoi, kiem tra du lieu khuyet, ...
+```{r child=here::here("Part_1_CommunityCrime","Part_1_CommunityCrime_EF.Rmd")}
 ```
 
-*(TODO: diễn giải kết quả EDA.)*
-
-## Tiền xử lý dữ liệu
-
-*(TODO: mô tả và thực hiện quy trình tiền xử lý — loại biến định danh, xử lý
-biến khuyết quá nhiều, impute phần khuyết còn lại, kiểm tra đa cộng tuyến.)*
-
-```{r p1-preprocess}
+```{r child=here::here("Part_1_CommunityCrime","Part_1_CommunityCrime_GH.Rmd")}
 ```
 
-## Chia tập huấn luyện / kiểm định
-
-```{r p1-split}
+```{r child=here::here("Part_1_CommunityCrime","Part_1_CommunityCrime_I.Rmd")}
 ```
-
-## Hồi quy trên thành phần chính (PCR)
-
-### Kiểm tra độ phù hợp của dữ liệu với PCA/PCR
-
-*(TODO: kiểm định Bartlett / chỉ số KMO để xác nhận dữ liệu phù hợp cho PCA.)*
-
-```{r p1-kmo-bartlett}
-```
-
-### Chọn số thành phần chính (PC) bằng cross-validation
-
-```{r p1-pcr-fit}
-```
-
-### Dự báo trên tập kiểm định
-
-```{r p1-pcr-predict}
-```
-
-## Các mô hình đối chứng: OLS, Ridge, LASSO
-
-```{r p1-ols-ridge-lasso}
-```
-
-## So sánh các mô hình
-
-```{r p1-compare}
-# TODO: dung compare_models() tu config/setup.R de tong hop RMSE, MAE, R2
-```
-
-*(TODO: diễn giải bảng so sánh — mô hình nào tốt nhất và vì sao.)*
-
-## Phân tích ma trận tải (loadings) của các thành phần chính
-
-```{r p1-loadings}
-```
-
-*(TODO: diễn giải ý nghĩa các nhóm biến ảnh hưởng đến tỷ lệ tội phạm.)*
-
-## Chuyển hệ số hồi quy PCR về không gian biến gốc
-
-```{r p1-pcr-coef-original}
-```
-
-*(TODO: diễn giải dấu và độ lớn của các hệ số hàng đầu.)*
-
-## Thảo luận: PCR, OLS, Ridge, LASSO trong bối cảnh đa cộng tuyến
-
-*(TODO: thảo luận ưu điểm/hạn chế của từng phương pháp và đề xuất mô hình
-phù hợp nhất.)*
-
-## Kết luận và hướng cải thiện
-
-*(TODO: kết luận và đề xuất hướng cải thiện mô hình.)*
