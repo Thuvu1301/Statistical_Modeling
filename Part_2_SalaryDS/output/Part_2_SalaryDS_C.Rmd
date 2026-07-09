@@ -1,1 +1,8 @@
+<!--
+## Lựa chọn phương pháp phân tích
 
+*(TODO: lựa chọn và giải thích phương pháp phù hợp cho:
+(i) các yếu tố ảnh hưởng đến lương; (ii) so sánh lương giữa các nhóm
+(ANOVA / kiểm định trung bình); (iii) xu hướng lương theo thời gian.)*
+
+-->
