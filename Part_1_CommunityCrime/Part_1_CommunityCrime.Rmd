@@ -9,11 +9,11 @@ knitr::opts_chunk$set(fig.align = "center")
 ```{r child=here::here("Part_1_CommunityCrime","Part_1_CommunityCrime_ABCD.Rmd")}
 ```
 
-```{r child=here::here("Part_1_CommunityCrime","Part_1_CommunityCrime_EF.Rmd")}
+```{r child=here::here("Part_1_CommunityCrime","Part_2_CommunityCrime_EF.Rmd")}
 ```
 
-```{r child=here::here("Part_1_CommunityCrime","Part_1_CommunityCrime_GH.Rmd")}
+```{r child=here::here("Part_1_CommunityCrime","Part_3_CommunityCrime_GH.Rmd")}
 ```
 
-```{r child=here::here("Part_1_CommunityCrime","Part_1_CommunityCrime_I.Rmd")}
+```{r child=here::here("Part_1_CommunityCrime","Part_4_CommunityCrime_I.Rmd")}
 ```
