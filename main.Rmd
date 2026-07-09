@@ -1,0 +1,114 @@
+---
+title: "Đồ án kết thúc học phần"
+author:
+  - "[TODO: Họ tên thành viên 1]"
+  - "[TODO: Họ tên thành viên 2]"
+  - "[TODO: Họ tên thành viên 3]"
+date: "`r format(Sys.Date(), '%d/%m/%Y')`"
+
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 2
+    number_sections: true
+    latex_engine: xelatex
+    keep_tex: false
+  html_document:
+    toc: true
+    toc_depth: 2
+    number_sections: true
+    df_print: paged
+
+fontsize: 11pt
+geometry: margin=2.5cm
+mainfont: "Times New Roman"
+
+bibliography: references.bib
+link-citations: true
+nocite: |
+  @*
+
+header-includes:
+  - \usepackage{float}
+  - \usepackage{amsmath}
+  - \usepackage{amssymb}
+  - \usepackage{booktabs}
+  - \usepackage{graphicx}
+  - \let\maketitle\relax
+  - \renewcommand{\contentsname}{Mục lục}
+
+editor_options:
+  markdown:
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE
+)
+```
+
+```{=latex}
+\begin{titlepage}
+\thispagestyle{empty}
+\begin{center}
+
+\vspace*{1cm}
+{\LARGE\bfseries TRƯỜNG ĐẠI HỌC KHOA HỌC TỰ NHIÊN}\\[0.3em]
+{\LARGE\bfseries KHOA TOÁN -- TIN HỌC}
+
+\vspace{2cm}
+
+{\Large\bfseries BÁO CÁO}\\[0.5em]
+{\LARGE\bfseries MÔ HÌNH HÓA THỐNG KÊ}\\[0.7em]
+\rule{0.6\textwidth}{0.5pt}\\[0.6em]
+{\large \textbf{Đồ án kết thúc học phần}}
+
+\vspace{2cm}
+
+{\large Giảng viên hướng dẫn: \textbf{[TODO: Tên giảng viên]}}
+
+\vspace{1.5cm}
+
+{\large\bfseries Nhóm [TODO: XX]}
+
+\vspace{0.6em}
+{\small
+\begin{tabular}{|l|c|p{5.5cm}|c|}
+\hline
+\textbf{Họ và Tên} & \textbf{Mã số HV} & \textbf{Công việc} & \textbf{Mức độ hoàn thành} \\
+\hline
+{[}TODO{]} & {[}TODO{]} & {[}TODO{]} & {[}TODO{]}\% \\
+\hline
+{[}TODO{]} & {[}TODO{]} & {[}TODO{]} & {[}TODO{]}\% \\
+\hline
+{[}TODO{]} & {[}TODO{]} & {[}TODO{]} & {[}TODO{]}\% \\
+\hline
+\end{tabular}
+}
+
+\vfill
+{\large TP. Hồ Chí Minh, 2026}
+\end{center}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+```
+
+```{r child="Part_1_CommunityCrime/Part_1_CommunityCrime.Rmd"}
+```
+
+\newpage
+
+```{r child="Part_2_SalaryDS/Part_2_SalaryDS.Rmd"}
+```
+
+\newpage
+
+```{r child="Part_3_FreeChoice/Part_3_FreeChoice.Rmd"}
+```
+
+# Tài liệu tham khảo

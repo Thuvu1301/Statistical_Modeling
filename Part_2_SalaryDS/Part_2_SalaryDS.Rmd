@@ -1,0 +1,104 @@
+# Part 2: Mức lương ở các vị trí việc làm trong lĩnh vực khoa học dữ liệu
+
+```{r p2-setup, include=FALSE}
+source("../config/setup.R")
+knitr::opts_chunk$set(fig.align = "center")
+```
+
+## 2.1. Giới thiệu bộ dữ liệu
+
+*(TODO: giới thiệu nguồn dữ liệu "Data Science Job Salaries" (Kaggle),
+607 quan trắc, 11 biến — xem mô tả biến trong đề bài.)*
+
+```{r p2-load-data}
+salary_raw <- read.csv("data/raw/ds_salaries.csv")
+dim(salary_raw)
+str(salary_raw)
+```
+
+## 2.2. Tiền xử lý dữ liệu
+
+*(TODO: xử lý dữ liệu khuyết (nếu có), mã hóa biến phân loại, gộp nhóm
+`job_title` thành các nhóm hợp lý (vd: DA, DS, DE, ML, Manager, Khác, ...),
+loại bỏ cột chỉ số dòng không dùng.)*
+
+```{r p2-preprocess}
+salary <- salary_raw %>% select(-X)  # TODO: cập nhật tiền xử lý đầy đủ hơn
+
+# TODO: gộp nhóm job_title, vd:
+# salary <- salary %>%
+#   mutate(job_group = case_when(
+#     str_detect(job_title, "Data Scientist") ~ "DS",
+#     str_detect(job_title, "Data Analyst")   ~ "DA",
+#     str_detect(job_title, "Data Engineer")  ~ "DE",
+#     str_detect(job_title, "Machine Learning|ML") ~ "ML",
+#     TRUE ~ "Other"
+#   ))
+
+sum(is.na(salary))
+```
+
+## 2.3. Phân tích khám phá dữ liệu (EDA)
+
+```{r p2-eda-target}
+# TODO: thống kê mô tả + phân phối salary_in_usd
+ggplot(salary, aes(x = salary_in_usd)) +
+  geom_histogram(bins = 30, fill = "#2c7fb8", color = "white")
+```
+
+```{r p2-eda-groups}
+# TODO: so sánh lương theo experience_level, company_size, employment_type,
+# remote_ratio, khu vực địa lý (vd boxplot theo nhóm)
+```
+
+```{r p2-eda-trend}
+# TODO: xu hướng lương theo work_year
+```
+
+*(TODO: diễn giải các phát hiện chính từ EDA.)*
+
+## 2.4. Lựa chọn phương pháp phân tích
+
+*(TODO: lựa chọn và giải thích phương pháp phù hợp cho:
+(i) các yếu tố ảnh hưởng đến lương; (ii) so sánh lương giữa các nhóm
+(ANOVA / kiểm định trung bình); (iii) xu hướng lương theo thời gian.)*
+
+## 2.5. Chia tập huấn luyện / kiểm định
+
+```{r p2-split}
+set.seed(2026)
+n <- nrow(salary)
+train_idx <- sample(seq_len(n), size = floor(0.8 * n))
+train <- salary[train_idx, ]
+test  <- salary[-train_idx, ]
+dim(train); dim(test)
+```
+
+## 2.6. Xây dựng mô hình dự đoán lương
+
+*(TODO: xây dựng ít nhất 2 mô hình hồi quy, vd OLS + Ridge/LASSO/PCR.)*
+
+```{r p2-model-ols}
+# TODO: mô hình OLS (ví dụ)
+# ols_fit <- lm(salary_in_usd ~ ., data = train)
+```
+
+```{r p2-model-2}
+# TODO: mô hình thứ hai (Ridge/LASSO/PCR/...)
+```
+
+## 2.7. Đánh giá và so sánh mô hình
+
+```{r p2-compare}
+# TODO: dùng compare_models() từ config/setup.R để tổng hợp RMSE, MAE, R2
+```
+
+*(TODO: chọn mô hình tốt nhất và giải thích lý do.)*
+
+## 2.8. Diễn giải các biến quan trọng
+
+*(TODO: diễn giải ý nghĩa của các biến quan trọng trong mô hình được chọn.)*
+
+## 2.9. Đề xuất cải thiện
+
+*(TODO: đề xuất hướng cải thiện mô hình / phương pháp phân tích khác.)*

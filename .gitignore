@@ -1,0 +1,22 @@
+# File sinh ra khi build/knit (không cần đưa lên git)
+*.log
+*.aux
+*.toc
+*.out
+*.lof
+*.lot
+*.synctex.gz
+main_files/
+*_files/
+*_cache/
+main.pdf
+main.html
+*.tex
+
+# R
+.Rhistory
+.RData
+.Rproj.user/
+
+# macOS
+.DS_Store

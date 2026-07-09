@@ -1,0 +1,174 @@
+# Part 1: Dự đoán tỷ lệ tội phạm bạo lực trong các cộng đồng (Communities and Crime)
+
+```{r p1-setup, include=FALSE}
+source("../config/setup.R")
+library(psych)
+knitr::opts_chunk$set(fig.align = "center")
+```
+
+## 1.1. Giới thiệu bộ dữ liệu
+
+*(TODO: giới thiệu nguồn dữ liệu UCI Communities and Crime, 1994 quan sát,
+128 biến gồm 4 biến định danh + fold, 122 biến giải thích, 1 biến phản hồi
+`ViolentCrimesPerPop`.)*
+
+## 1.2. Đọc dữ liệu và khám phá dữ liệu (EDA)
+
+```{r p1-load-data}
+names_file <- readLines("data/raw/communities.names")
+attr_lines <- grep("^@attribute", names_file, value = TRUE)
+col_names  <- sub("^@attribute\\s+(\\S+).*$", "\\1", attr_lines)
+
+crime_raw <- read.csv(
+  "data/raw/communities.data",
+  header = FALSE, na.strings = "?", col.names = col_names
+)
+
+dim(crime_raw)
+```
+
+```{r p1-eda-target}
+# TODO: phân phối biến phản hồi, thống kê mô tả, boxplot/histogram, ...
+ggplot(crime_raw, aes(x = ViolentCrimesPerPop)) +
+  geom_histogram(bins = 40, fill = "#2c7fb8", color = "white")
+```
+
+```{r p1-eda-missing}
+# TODO: khám phá thêm các biến giải thích quan trọng (tương quan, phân phối, ...)
+na_prop <- sort(colMeans(is.na(crime_raw)), decreasing = TRUE)
+na_prop[na_prop > 0]
+```
+
+*(TODO: diễn giải kết quả EDA — hình dạng phân phối biến phản hồi, các biến
+khuyết dữ liệu và mức độ khuyết.)*
+
+## 1.3. Tiền xử lý dữ liệu
+
+*(TODO: mô tả quy trình tiền xử lý. Gợi ý: loại biến định danh + `fold`,
+loại biến khuyết quá nhiều (vd > 30%), impute phần khuyết còn lại.)*
+
+```{r p1-preprocess}
+id_vars <- c("state", "county", "community", "communityname", "fold")
+high_na_vars <- names(na_prop[na_prop > 0.3])  # TODO: xem lại ngưỡng cho phù hợp
+
+crime <- crime_raw %>%
+  select(-all_of(id_vars), -all_of(high_na_vars)) %>%
+  mutate(across(everything(), ~ ifelse(is.na(.), median(., na.rm = TRUE), .)))
+
+dim(crime)
+sum(is.na(crime))
+```
+
+```{r p1-corrplot, fig.width=9, fig.height=9}
+# TODO: trực quan hóa ma trận tương quan (corrplot) và nhận xét đa cộng tuyến
+cor_mat <- cor(crime)
+```
+
+## 1.4. Chia tập huấn luyện / kiểm định
+
+```{r p1-split}
+set.seed(2026)
+n <- nrow(crime)
+train_idx <- sample(seq_len(n), size = floor(0.8 * n))
+train <- crime[train_idx, ]
+test  <- crime[-train_idx, ]
+dim(train); dim(test)
+```
+
+## 1.5. Hồi quy trên thành phần chính (PCR)
+
+### 1.5.1. Kiểm tra độ phù hợp của dữ liệu với PCA/PCR
+
+```{r p1-kmo-bartlett, warning=FALSE}
+# TODO: kiểm định Bartlett / chỉ số KMO để xác nhận dữ liệu phù hợp cho PCA
+X_train <- train %>% select(-ViolentCrimesPerPop)
+# bartlett <- cortest.bartlett(cor(X_train), n = nrow(X_train))
+# kmo <- KMO(cor(X_train))
+```
+
+### 1.5.2. Chọn số thành phần chính (PC) bằng cross-validation
+
+```{r p1-pcr-fit}
+pcr_fit <- pcr(
+  ViolentCrimesPerPop ~ ., data = train,
+  scale = TRUE, validation = "CV", segments = 10
+)
+validationplot(pcr_fit, val.type = "RMSEP")
+```
+
+```{r p1-pcr-ncomp}
+# TODO: chọn ncomp (vd: onesigma rule) và giải thích lựa chọn
+best_ncomp <- selectNcomp(pcr_fit, method = "onesigma", plot = FALSE)
+best_ncomp
+```
+
+### 1.5.3. Dự báo trên tập kiểm định
+
+```{r p1-pcr-predict}
+pred_pcr <- predict(pcr_fit, newdata = test, ncomp = best_ncomp)[, 1, 1]
+```
+
+## 1.6. Các mô hình đối chứng: OLS, Ridge, LASSO
+
+```{r p1-ols}
+ols_fit <- lm(ViolentCrimesPerPop ~ ., data = train)
+pred_ols <- predict(ols_fit, newdata = test)
+```
+
+```{r p1-ridge-lasso}
+x_train <- model.matrix(ViolentCrimesPerPop ~ ., train)[, -1]
+y_train <- train$ViolentCrimesPerPop
+x_test  <- model.matrix(ViolentCrimesPerPop ~ ., test)[, -1]
+y_test  <- test$ViolentCrimesPerPop
+
+cv_ridge   <- cv.glmnet(x_train, y_train, alpha = 0)
+pred_ridge <- predict(cv_ridge, s = "lambda.min", newx = x_test)[, 1]
+
+cv_lasso   <- cv.glmnet(x_train, y_train, alpha = 1)
+pred_lasso <- predict(cv_lasso, s = "lambda.min", newx = x_test)[, 1]
+```
+
+## 1.7. So sánh các mô hình
+
+```{r p1-compare}
+results_p1 <- bind_rows(
+  compare_models("PCR",   y_test, pred_pcr),
+  compare_models("OLS",   y_test, pred_ols),
+  compare_models("Ridge", y_test, pred_ridge),
+  compare_models("LASSO", y_test, pred_lasso)
+)
+
+results_p1 %>%
+  arrange(RMSE) %>%
+  kable(digits = 4, caption = "So sánh RMSE, MAE, R2 trên tập validation")
+```
+
+*(TODO: diễn giải bảng so sánh — mô hình nào tốt nhất và vì sao.)*
+
+## 1.8. Phân tích ma trận tải (loadings) của các thành phần chính
+
+```{r p1-loadings}
+# TODO: xem loadings của các PC quan trọng, nhóm biến theo chủ đề
+loadings_mat <- loadings(pcr_fit)
+```
+
+*(TODO: diễn giải ý nghĩa các nhóm biến ảnh hưởng đến tỷ lệ tội phạm.)*
+
+## 1.9. Chuyển hệ số hồi quy PCR về không gian biến gốc
+
+```{r p1-pcr-coef-original}
+# coef() của gói pls tự động quy đổi hệ số từ không gian PC về không gian biến gốc
+pcr_coef_orig <- coef(pcr_fit, ncomp = best_ncomp, intercept = FALSE)[, 1, 1]
+sort(abs(pcr_coef_orig), decreasing = TRUE) %>% head(15)
+```
+
+*(TODO: diễn giải dấu và độ lớn của các hệ số hàng đầu.)*
+
+## 1.10. Thảo luận: PCR, OLS, Ridge, LASSO trong bối cảnh đa cộng tuyến
+
+*(TODO: thảo luận ưu điểm/hạn chế của từng phương pháp và đề xuất mô hình
+phù hợp nhất.)*
+
+## 1.11. Kết luận và hướng cải thiện
+
+*(TODO: kết luận và đề xuất hướng cải thiện mô hình.)*
