@@ -1,1 +1,9 @@
+<!--
+## Đánh giá và so sánh mô hình
 
+```{r p2-compare}
+# TODO: dùng compare_models() từ config/setup.R để tổng hợp RMSE, MAE, R2
+```
+
+diễn giải ý nghĩa các biến trong mô hình
+-->
