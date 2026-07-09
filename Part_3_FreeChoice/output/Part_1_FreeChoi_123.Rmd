@@ -1,1 +1,40 @@
 
+<!--
+## Giới thiệu đề tài và bộ dữ liệu
+
+*(TODO: tên đề tài, mục tiêu nghiên cứu/phân tích, nguồn gốc bộ dữ liệu
+(Kaggle/UCI/EU Open Data/data.gov/Statista/...), mô tả ý nghĩa các biến
+(>= 8 biến, không kể biến định danh) và xác định biến phản hồi nếu có.
+Lưu ý: không được trùng bộ dữ liệu Communities and Crime hoặc Data Science
+Job Salaries đã dùng ở Part 1, Part 2.)*
+
+```{r p3-load-data}
+# TODO: đặt file dữ liệu vào Part_3_FreeChoice/data/raw/ rồi đọc vào đây
+# df <- read.csv(here::here("Part_3_FreeChoice", "data", "raw", "<ten_file>.csv"))
+```
+
+## Tiền xử lý và khám phá dữ liệu (EDA)
+
+*(TODO: xử lý dữ liệu khuyết, ngoại lệ, mã hóa biến phân loại, chuẩn hóa dữ
+liệu nếu cần; thống kê mô tả và trực quan hóa dữ liệu.)*
+
+```{r p3-preprocess}
+```
+
+```{r p3-eda}
+```
+
+## Xây dựng mô hình
+
+*(TODO: chọn phương pháp phù hợp với mục tiêu phân tích — OLS, PCR, Ridge,
+LASSO, Elastic-Net, ANOVA một/nhiều nhân tố, hoặc mô hình thống kê khác đã
+học.)*
+
+```{r p3-split}
+# TODO: chia train/test nếu bài toán là dự đoán
+```
+
+```{r p3-model}
+# TODO: xây dựng mô hình
+```
+-->
