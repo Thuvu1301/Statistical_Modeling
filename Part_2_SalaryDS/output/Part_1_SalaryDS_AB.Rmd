@@ -17,4 +17,14 @@ loại bỏ cột chỉ số dòng không dùng.)*
 
 ```{r p2-preprocess}
 ``` 
+
+## Phân tích khám phá dữ liệu (EDA)
+
+```{r p2-eda}
+# TODO: thong ke mo ta, phan phoi salary_in_usd, so sanh theo nhom, xu huong
+# theo thoi gian, ...
+```
+
+*(TODO: diễn giải các phát hiện chính từ EDA.)*
+
 -->
