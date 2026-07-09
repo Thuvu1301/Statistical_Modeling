@@ -1,1 +1,13 @@
+<!--
+## Chia tập huấn luyện / kiểm định
 
+```{r p2-split}
+```
+
+## Xây dựng mô hình dự đoán lương
+
+*(TODO: xây dựng ít nhất 2 mô hình hồi quy, vd OLS + Ridge/LASSO/PCR.)*
+
+```{r p2-model}
+```
+-->
