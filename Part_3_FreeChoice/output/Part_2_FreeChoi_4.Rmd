@@ -1,1 +1,12 @@
 
+<!--
+
+## Đánh giá mô hình
+
+*(TODO: kiểm tra giả định mô hình (nếu có); đánh giá bằng chỉ số phù hợp
+(RMSE, MAE, R2, Accuracy, AIC, BIC, ...); so sánh và chọn mô hình phù hợp
+nhất nếu xây dựng nhiều mô hình.)*
+
+```{r p3-evaluate}
+```
+-->
