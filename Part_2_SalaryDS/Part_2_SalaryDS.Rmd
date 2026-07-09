@@ -6,64 +6,17 @@ source(here::here("config", "setup.R"))
 knitr::opts_chunk$set(fig.align = "center")
 ```
 
-## Giới thiệu bộ dữ liệu
-
-*(TODO: giới thiệu nguồn dữ liệu "Data Science Job Salaries" (Kaggle),
-607 quan trắc, 11 biến — xem mô tả biến trong đề bài.)*
-
-```{r p2-load-data}
-# TODO: doc du lieu, vi du:
-# salary_raw <- read.csv(here::here("Part_2_SalaryDS", "data", "raw", "ds_salaries.csv"))
+```{r child=here::here("Part_2_SalaryDS","Part_1_SalaryDS_AB.Rmd")}
 ```
 
-## Tiền xử lý dữ liệu
-
-*(TODO: xử lý dữ liệu khuyết (nếu có), mã hóa biến phân loại, gộp nhóm
-`job_title` thành các nhóm hợp lý (vd: DA, DS, DE, ML, Manager, Khác, ...),
-loại bỏ cột chỉ số dòng không dùng.)*
-
-```{r p2-preprocess}
+```{r child=here::here("Part_2_SalaryDS","Part_2_SalaryDS_C.Rmd")}
 ```
 
-## Phân tích khám phá dữ liệu (EDA)
-
-```{r p2-eda}
-# TODO: thong ke mo ta, phan phoi salary_in_usd, so sanh theo nhom, xu huong
-# theo thoi gian, ...
+```{r child=here::here("Part_2_SalaryDS","Part_3_SalaryDS_DE.Rmd")}
 ```
 
-*(TODO: diễn giải các phát hiện chính từ EDA.)*
-
-## Lựa chọn phương pháp phân tích
-
-*(TODO: lựa chọn và giải thích phương pháp phù hợp cho:
-(i) các yếu tố ảnh hưởng đến lương; (ii) so sánh lương giữa các nhóm
-(ANOVA / kiểm định trung bình); (iii) xu hướng lương theo thời gian.)*
-
-## Chia tập huấn luyện / kiểm định
-
-```{r p2-split}
+```{r child=here::here("Part_2_SalaryDS","Part_4_SalaryDS_FG.Rmd")}
 ```
 
-## Xây dựng mô hình dự đoán lương
-
-*(TODO: xây dựng ít nhất 2 mô hình hồi quy, vd OLS + Ridge/LASSO/PCR.)*
-
-```{r p2-model}
+```{r child=here::here("Part_2_SalaryDS","Part_5_SalaryDS_H.Rmd")}
 ```
-
-## Đánh giá và so sánh mô hình
-
-```{r p2-compare}
-# TODO: dùng compare_models() từ config/setup.R để tổng hợp RMSE, MAE, R2
-```
-
-*(TODO: chọn mô hình tốt nhất và giải thích lý do.)*
-
-## Diễn giải các biến quan trọng
-
-*(TODO: diễn giải ý nghĩa của các biến quan trọng trong mô hình được chọn.)*
-
-## Đề xuất cải thiện
-
-*(TODO: đề xuất hướng cải thiện mô hình / phương pháp phân tích khác.)*
