@@ -1,1 +1,7 @@
 
+<!--
+
+## Đề xuất cải thiện
+
+*(TODO: đề xuất hướng cải thiện mô hình / phương pháp phân tích khác.)*
+-->
