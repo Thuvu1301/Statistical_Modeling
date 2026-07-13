@@ -1,40 +1,744 @@
+# Giới thiệu về bộ dữ liệu
 
-<!--
-## Giới thiệu đề tài và bộ dữ liệu
+## Mục tiêu phân tích
 
-*(TODO: tên đề tài, mục tiêu nghiên cứu/phân tích, nguồn gốc bộ dữ liệu
-(Kaggle/UCI/EU Open Data/data.gov/Statista/...), mô tả ý nghĩa các biến
-(>= 8 biến, không kể biến định danh) và xác định biến phản hồi nếu có.
-Lưu ý: không được trùng bộ dữ liệu Communities and Crime hoặc Data Science
-Job Salaries đã dùng ở Part 1, Part 2.)*
+Đề tài được thực hiện nhằm phân tích mối quan hệ giữa nhu cầu thuê xe đạp với các yếu tố về thời gian, mùa vụ và điều kiện thời tiết. Trên cơ sở đó, tiến hành xây dựng mô hình hồi quy để dự đoán tổng số lượt thuê xe đạp.
 
-```{r p3-load-data}
-# TODO: đặt file dữ liệu vào Part_3_FreeChoice/data/raw/ rồi đọc vào đây
-# df <- read.csv(here::here("Part_3_FreeChoice", "data", "raw", "<ten_file>.csv"))
+Kết quả phân tích có thể hỗ trợ đơn vị vận hành hệ thống trong việc dự báo nhu cầu sử dụng, phân bổ số lượng xe và xây dựng kế hoạch vận hành phù hợp theo từng thời điểm.
+
+## Tổng quan về bộ dữ liệu
+
+Bộ dữ liệu được sử dụng là **Bike Sharing Dataset**, do Hadi Fanaee-T và João Gama xây dựng. Dữ liệu được thu thập từ hệ thống **Capital Bikeshare** tại Washington, D.C., Hoa Kỳ, trong hai năm 2011 và 2012 và được lưu trữ trên UCI Machine Learning Repository (<https://archive.ics.uci.edu/dataset/275/bike+sharing+dataset>).
+
+Dữ liệu thuê xe được tổng hợp theo giờ và theo ngày, sau đó kết hợp với các thông tin về thời tiết và mùa vụ. Trong bài phân tích này, sử dụng tệp **`hour.csv`**, gồm 17.379 quan sát được ghi nhận theo từng giờ.
+
+## Mô tả các biến
+
+Các biến trong bộ dữ liệu được mô tả như sau:
+
+| Biến | Ý nghĩa |
+|:----------------------|:-----------------------------------------------|
+| `instant` | Số thứ tự của quan sát trong bộ dữ liệu |
+| `dteday` | Ngày ghi nhận dữ liệu |
+| `season` | Mùa trong năm, gồm mùa xuân, mùa hè, mùa thu và mùa đông |
+| `yr` | Năm ghi nhận dữ liệu, trong đó 0 là năm 2011 và 1 là năm 2012 |
+| `mnth` | Tháng trong năm, nhận giá trị từ 1 đến 12 |
+| `hr` | Giờ trong ngày, nhận giá trị từ 0 đến 23 |
+| `holiday` | Ngày lễ, trong đó 1 là có, 0 là không |
+| `weekday` | Ngày trong tuần |
+| `workingday` | Nhận giá trị 1 nếu là ngày làm việc và 0 nếu là cuối tuần hoặc ngày nghỉ lễ |
+| `weathersit` | Tình trạng thời tiết, được phân thành các mức từ thời tiết thuận lợi đến thời tiết xấu |
+| `temp` | Nhiệt độ thực tế đã được chuẩn hóa |
+| `atemp` | Nhiệt độ cảm nhận đã được chuẩn hóa |
+| `hum` | Độ ẩm đã được chuẩn hóa |
+| `windspeed` | Tốc độ gió đã được chuẩn hóa |
+| `casual` | Số lượt thuê xe của người dùng chưa đăng ký |
+| `registered` | Số lượt thuê xe của người dùng đã đăng ký |
+| `cnt` | Tổng số lượt thuê xe đạp (biến mục tiêu) |
+
+Biến `season` và `weathersit` được mã hóa dưới dạng số nhưng mang ý nghĩa phân loại. Các biến `temp`, `atemp`, `hum` và `windspeed` đã được chuẩn hóa theo các giá trị lớn nhất tương ứng.
+
+# Tiền xử lý dữ liệu
+
+## Tổng quan về dữ liệu
+
+```{r}
+bike_raw = read_csv("../DoAn/bike_sharing_hour.csv")
+glimpse(bike_raw)
 ```
 
-## Tiền xử lý và khám phá dữ liệu (EDA)
+Bộ dữ liệu có 17 biến và 17,319 quan sát.
 
-*(TODO: xử lý dữ liệu khuyết, ngoại lệ, mã hóa biến phân loại, chuẩn hóa dữ
-liệu nếu cần; thống kê mô tả và trực quan hóa dữ liệu.)*
+## Chuyển đổi kiểu dữ liệu và tạo biến
 
-```{r p3-preprocess}
+```{r}
+bike<- bike_raw %>%
+  mutate(
+    dteday = as.Date(dteday),
+    datetime = as.POSIXct(dteday, tz = "UTC") + hours(hr),
+    season = factor(season, levels = 1:4, labels = c("Xuân", "Hạ", "Thu", "Đông")),
+    yr = factor(yr, levels = c(0, 1), labels = c("2011", "2012")),
+    mnth = factor(mnth, levels = 1:12, labels = paste0("Th", 1:12)),
+    hr = factor(hr, levels = 0:23, labels = sprintf("%02d", 0:23)),
+    holiday = factor(holiday, levels = c(0, 1), labels = c("Không", "Có")),
+    weekday = factor(weekday, levels = 0:6, labels = c("CN", "T2", "T3", "T4", "T5", "T6", "T7")),
+    workingday = factor(workingday, levels = c(0, 1), labels = c("Không", "Có")),
+    weathersit = factor(weathersit, levels = 1:4, labels = c("Quang đãng", "Sương mù, nhiều mây", "Mưa hoặc tuyết nhẹ", "Mưa hoặc tuyết lớn"))
+  )
+
+str(bike)
 ```
 
-```{r p3-eda}
+Biến `datetime` được tạo bằng cách kết hợp ngày quan sát dteday và giờ trong ngày hr. Biến này đại diện cho thời điểm đầy đủ của từng quan sát theo đơn vị giờ, giúp sắp xếp dữ liệu theo trình tự thời gian, kiểm tra tính liên tục của chuỗi dữ liệu, trực quan hóa xu hướng nhu cầu thuê xe và chia tập huấn luyện–kiểm định theo thời gian. `datetime` chỉ được sử dụng như biến chỉ mục thời gian và không được đưa trực tiếp vào các mô hình hồi quy.
+
+## Kiểm tra và xử lý dữ liệu khuyết
+
+```{r}
+sum(is.na(bike))
 ```
 
-## Xây dựng mô hình
+Không có dữ liệu khuyết trong bộ dữ liệu này.
 
-*(TODO: chọn phương pháp phù hợp với mục tiêu phân tích — OLS, PCR, Ridge,
-LASSO, Elastic-Net, ANOVA một/nhiều nhân tố, hoặc mô hình thống kê khác đã
-học.)*
+## Kiểm tra và xử lý dữ liệu trùng
 
-```{r p3-split}
-# TODO: chia train/test nếu bài toán là dự đoán
+```{r duplicate-check}
+# Kiểm tra dòng trùng hoàn toàn, không xét biến chỉ số instant
+duplicate_index <- duplicated(bike %>% select(-instant))
+duplicated_rows <- sum(duplicate_index)
+
+# Kiểm tra thời điểm ngày - giờ bị trùng
+duplicated_datetime <- sum(duplicated(bike$datetime))
+
+# Bảng kết quả kiểm tra
+tibble(
+  Noi_dung = c(
+    "Số dòng trùng hoàn toàn",
+    "Số thời điểm ngày - giờ bị trùng"
+  ),
+  So_luong = c(
+    duplicated_rows,
+    duplicated_datetime
+  )
+) %>%
+  knitr::kable(
+    caption = "Kiểm tra dữ liệu trùng lặp",
+    col.names = c("Nội dung", "Số lượng")
+  )
+
+# Loại bỏ các dòng trùng hoàn toàn nếu có
+bike <- bike[!duplicate_index, ]
 ```
 
-```{r p3-model}
-# TODO: xây dựng mô hình
+Kiểm tra cho thấy không có dữ liệu trùng.
+
+## Kiểm tra khoảng thời gian không xuất hiện trong dữ liệu
+
+Dữ liệu theo giờ không nhất thiết chứa đầy đủ tất cả thời điểm trong khoảng 2011--2012Việc kiểm tra số giờ bị thiếu trong chuỗi thời gian để hiểu rõ cấu trúc dữ liệu, nhưng không tự ý thêm quan sát với `cnt = 0` vì giờ không được ghi nhận không đồng nghĩa với không có lượt thuê.
+
+```{r missing-hours}
+full_time_grid <- tibble(
+  datetime = seq(
+    from = min(bike$datetime, na.rm = TRUE),
+    to = max(bike$datetime, na.rm = TRUE),
+    by = "hour"
+  )
+)
+
+missing_datetimes <- full_time_grid %>%
+  anti_join(
+    bike %>%
+      dplyr::select(datetime) %>%
+      distinct(),
+    by = "datetime"
+  )
+
+n_missing_hours <- nrow(missing_datetimes)
+
+tibble(
+  Thoi_diem_dau = min(bike$datetime, na.rm = TRUE),
+  Thoi_diem_cuoi = max(bike$datetime, na.rm = TRUE),
+  So_gio_ly_thuyet = nrow(full_time_grid),
+  So_gio_quan_sat = nrow(bike),
+  So_gio_khong_xuat_hien = n_missing_hours
+) %>%
+  knitr::kable(
+    caption = "Kiểm tra tính liên tục của dữ liệu theo giờ",
+    col.names = c(
+      "Thời điểm đầu",
+      "Thời điểm cuối",
+      "Số giờ lý thuyết",
+      "Số giờ quan sát",
+      "Số giờ không xuất hiện"
+    )
+  )
 ```
--->
+
+## Xử lý biến định danh và rò rỉ dữ liệu
+
+- `instant` chỉ là chỉ số bản ghi nên không được sử dụng làm biến giải thích trong mô hình.
+- Theo tệp `Readme.txt`, `cnt` là tổng của `casual` (số lượt thuê của người dùng chưa đăng kí) và `registered` (số lượt thuê của người dùng đã đăng ký); do đó, hai biến này không được đưa vào mô hình dự đoán `cnt`, vì nếu đứa vào sẽ dẫn đến hiện tượng data leakage (rò rỉ dữ liệu.)
+- Các biến trên vẫn được giữ trong dữ liệu gốc để phục vụ kiểm tra và đối chiếu.
+
+```{r create-model-data}
+bike_model <- bike %>%
+  dplyr::select(-instant, -casual, -registered)
+```
+
+## Kiểm tra và xử lý hiện tượng đa cộng tuyến
+
+Bộ dữ liệu ban đầu gồm 17 biến. Tuy nhiên, đa cộng tuyến chỉ được kiểm tra trên các biến giải thích dự kiến đưa vào mô hình. Cụ thể:
+
+- `cnt` là biến phản hồi nên không được xem là biến giải thích.
+- `instant` chỉ là chỉ số của bản ghi.
+- `dteday` và `datetime` chỉ được sử dụng để xác định và sắp xếp thời điểm quan sát.
+- `casual` và `registered` là hai thành phần trực tiếp cấu thành biến phản hồi `cnt`.
+- `season` không được đưa đồng thời với `mnth` vì cùng phản ánh yếu tố mùa vụ.
+- `holiday` không được đưa đồng thời với `workingday` và `weekday` nhằm hạn chế sự chồng lặp thông tin.
+
+Do đó, mô hình đầy đủ sử dụng 10 biến giải thích gồm `yr`, `mnth`, `hr`, `workingday`, `weekday`, `weathersit`, `temp`, `atemp`, `hum` và `windspeed`.
+
+### Ma trận tương quan
+
+```{r correlation-matrix, fig.width=7, fig.height=5}
+cor_matrix <- bike_raw %>%
+  dplyr::select(
+    cnt,
+    yr,
+    mnth,
+    hr,
+    workingday,
+    weekday,
+    weathersit,
+    temp,
+    atemp,
+    hum,
+    windspeed
+  ) %>%
+  cor(
+    method = "spearman",
+    use = "complete.obs"
+  )
+
+# Chỉ giữ nửa trên của ma trận tương quan (kèm đường chéo)
+cor_matrix[lower.tri(cor_matrix)] <- NA
+
+cor_data <- as.data.frame(as.table(cor_matrix)) %>%
+  dplyr::rename(
+    Bien_1 = Var1,
+    Bien_2 = Var2,
+    He_so_tuong_quan = Freq
+  ) %>%
+  dplyr::filter(!is.na(He_so_tuong_quan))
+
+ggplot(
+  cor_data,
+  aes(
+    x = Bien_1,
+    y = Bien_2,
+    fill = He_so_tuong_quan
+  )
+) +
+  geom_tile(color = "white") +
+  geom_text(
+    aes(label = sprintf("%.2f", He_so_tuong_quan)),
+    size = 3
+  ) +
+  scale_fill_gradient2(
+    low = "firebrick2",
+    mid = "white",
+    high = "steelblue",
+    midpoint = 0,
+    limits = c(-1, 1)
+  ) +
+  labs(
+    title = "Ma trận tương quan giữa các biến",
+    x = NULL,
+    y = NULL,
+    fill = "Tương quan"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(
+      angle = 45,
+      hjust = 0,
+      vjust = 0
+    ),
+    panel.grid = element_blank()
+  )
+```
+
+Ma trận tương quan cho thấy phần lớn các cặp biến giải thích có mức tương quan thấp hoặc trung bình, vì vậy chưa ghi nhận đa cộng tuyến nghiêm trọng trên toàn bộ tập biến. Tuy nhiên, `temp` và `atemp` có hệ số tương quan rất cao, xấp xỉ 0,99, cho thấy hai biến chứa thông tin gần như trùng lặp. Do đó, cặp biến này cần được xem xét thêm thông qua VIF trước khi xây dựng mô hình hồi quy.
+
+### Kiểm tra VIF
+
+```{r vif-check}
+vif_model <- lm(
+  cnt ~ yr + mnth + hr + workingday + weekday +
+    weathersit + temp + atemp + hum + windspeed,
+  data = bike
+)
+
+vif_result <- car::vif(vif_model)
+
+if (is.matrix(vif_result)) {
+  vif_table <- tibble(
+    Bien = rownames(vif_result),
+    GVIF = vif_result[, 1],
+    Bac_tu_do = vif_result[, 2],
+    GVIF_hieu_chinh = vif_result[, 3]
+  )
+} else {
+  vif_table <- tibble(
+    Bien = names(vif_result),
+    VIF = as.numeric(vif_result)
+  )
+}
+
+knitr::kable(
+  vif_table,
+  digits = 3,
+  caption = "Kết quả kiểm tra đa cộng tuyến của mô hình đầy đủ"
+)
+```
+
+**Nhận xét:** Kết quả kiểm tra cho thấy `temp` và `atemp` có mức đa cộng tuyến nghiêm trọng, với VIF lần lượt là 54,052 và 46,468. Kết quả này phù hợp với hệ số tương quan rất cao giữa hai biến, xấp xỉ 0,99. Do cả hai cùng phản ánh đặc điểm nhiệt độ, biến `atemp` được loại khỏi tập biến giải thích và giữ lại `temp` vì có ý nghĩa trực tiếp và dễ diễn giải hơn.
+
+Biến `workingday` có VIF bằng 8,602, cho thấy mức độ đa cộng tuyến đáng lưu ý do có sự chồng lặp thông tin với `weekday`, nhưng vẫn thấp hơn ngưỡng 10 thường được sử dụng để nhận diện đa cộng tuyến nghiêm trọng. Vì vậy, biến `workingday` chưa bị loại tại bước này. Trong bước xây dựng mô hình, phương pháp Stepwise sẽ được sử dụng để lựa chọn tập biến phù hợp; sau đó, VIF sẽ được tính lại trên mô hình được lựa chọn để kiểm tra mức độ đa cộng tuyến còn lại.
+
+### Xử lý hiện tượng đa cộng tuyến
+
+```{r vif-after-removing-atemp}
+vif_model_reduced_1 <- lm(
+  cnt ~ yr + mnth + hr + workingday + weekday +
+    weathersit + temp + hum + windspeed,
+  data = bike
+)
+
+vif_result_reduced_1 <- car::vif(vif_model_reduced_1)
+
+vif_table_reduced_1 <- tibble(
+  Bien = rownames(vif_result_reduced_1),
+  GVIF = vif_result_reduced_1[, "GVIF"],
+  Bac_tu_do = vif_result_reduced_1[, "Df"],
+  GVIF_hieu_chinh =
+    vif_result_reduced_1[, "GVIF^(1/(2*Df))"]
+)
+
+knitr::kable(
+  vif_table_reduced_1,
+  digits = 3,
+  caption = "Kết quả kiểm tra đa cộng tuyến sau khi loại biến atemp"
+)
+```
+
+Sau khi loại bỏ biến `atempt`, mức độ đa cộng tuyến trong mô hình đã giảm đáng kể.
+
+## Kiểm tra outlier
+
+### Boxplot
+
+```{r boxplot-numeric, fig.width=10, fig.height=7}
+bike %>%
+  dplyr::select(where(is.numeric), -instant) %>%
+  tidyr::pivot_longer(
+    cols = everything(),
+    names_to = "Bien",
+    values_to = "Gia_tri"
+  ) %>%
+  ggplot2::ggplot(ggplot2::aes(x = Bien, y = Gia_tri)) +
+  ggplot2::geom_boxplot() +
+  ggplot2::facet_wrap(
+    ~ Bien,
+    scales = "free_y",
+    ncol = 3
+  ) +
+  ggplot2::labs(
+    title = "Boxplot của các biến định lượng",
+    x = NULL,
+    y = "Giá trị"
+  ) +
+  ggplot2::theme_minimal() +
+  ggplot2::theme(
+    axis.text.x = ggplot2::element_blank(),
+    axis.ticks.x = ggplot2::element_blank(),
+    strip.text = ggplot2::element_text(face = "bold")
+  )
+```
+
+### IQR
+
+Đối với biến phản hồi `cnt`, quy tắc IQR được dùng như công cụ sàng lọc:
+
+$$IQR=Q_3-Q_1,\qquad
+LB=Q_1-1.5IQR,\qquad
+UB=Q_3+1.5IQR.$$
+
+Các outlier được xác định bằng quy tắc IQR (chỉ xét các biến định lượng ban đầu, không xét các biến factor)
+
+```{r outlier-check}
+# Chọn các biến số cần kiểm tra ngoại lệ
+numeric_data <- bike %>%
+  dplyr::select(where(is.numeric)) %>%
+  dplyr::select(-instant)
+
+# Tính ngưỡng IQR và số quan sát ngoại lệ cho từng biến
+outlier_summary <- numeric_data %>%
+  tidyr::pivot_longer(
+    cols = everything(),
+    names_to = "Bien",
+    values_to = "Gia_tri"
+  ) %>%
+  dplyr::group_by(Bien) %>%
+  dplyr::summarise(
+    Q1 = quantile(Gia_tri, 0.25, na.rm = TRUE),
+    Q3 = quantile(Gia_tri, 0.75, na.rm = TRUE),
+    IQR = IQR(Gia_tri, na.rm = TRUE),
+    Nguong_duoi = Q1 - 1.5 * IQR,
+    Nguong_tren = Q3 + 1.5 * IQR,
+    So_quan_sat_ngoai_le = sum(
+      Gia_tri < Nguong_duoi | Gia_tri > Nguong_tren,
+      na.rm = TRUE
+    ),
+    Ty_le_ngoai_le = round(
+      100 * So_quan_sat_ngoai_le / sum(!is.na(Gia_tri)),
+      2
+    ),
+    .groups = "drop"
+  )
+
+outlier_summary
+```
+
+**Nhận xét:** Theo quy tắc IQR, ngoại lệ xuất hiện ở các biến `casual`, `registered`, `cnt`, `windspeed` và `hum`, trong khi `temp` và `atemp` không ghi nhận ngoại lệ. Do dữ liệu thuê xe được hệ thống tự động ghi nhận, các giá trị này nhiều khả năng phản ánh sự biến động thực tế của nhu cầu thuê xe và điều kiện thời tiết hơn là sai sót nhập liệu. Vì vậy, các quan sát ngoại lệ được giữ nguyên và không thực hiện loại bỏ hoặc thay thế trong bước tiền xử lý.
+
+# Khám phá dữ liệu
+
+Trong phần khám phá dữ liệu này, biến `log_cnt = log(1 + cnt)` được tạo tạm thời vì `cnt` là biến đếm không âm và có thể nhận giá trị bằng 0. Phép biến đổi `log(1 + cnt)` cho phép xử lý các quan sát bằng 0, đồng thời giúp giảm ảnh hưởng của các giá trị lớn và làm rõ hơn hình dạng phân phối của biến target. Việc so sánh phân phối của `cnt` và `log_cnt` được sử dụng để đánh giá sơ bộ liệu phép biến đổi log có giúp giảm độ lệch phải và ổn định mức độ phân tán hay không. Biến `log_cnt` trong phần này chỉ phục vụ mục đích mô tả và trực quan hóa. Các phép biến đổi chính thức cho mô hình sẽ được lựa chọn ở giai đoạn xây dựng mô hình sau khi dữ liệu đã được chia thành tập huấn luyện và tập kiểm định.
+
+```{r prepare-variables-for-eda}
+required_eda_vars <- c(
+  "dteday", "datetime", "season", "yr", "mnth", "hr", "holiday",
+  "weekday", "workingday", "weathersit", "temp", "atemp", "hum",
+  "windspeed", "casual", "registered", "cnt"
+)
+
+missing_eda_vars <- setdiff(required_eda_vars, names(bike))
+if (length(missing_eda_vars) > 0) {
+  stop(
+    "Dữ liệu bike còn thiếu các biến cần cho EDA: ",
+    paste(missing_eda_vars, collapse = ", ")
+  )
+}
+
+# Tính số giờ không xuất hiện nếu đối tượng này chưa được tạo ở phần tiền xử lý.
+if (!exists("n_missing_hours")) {
+  full_time_grid_eda <- tibble(
+    datetime = seq(
+      from = min(bike$datetime, na.rm = TRUE),
+      to = max(bike$datetime, na.rm = TRUE),
+      by = "hour"
+    )
+  )
+
+  n_missing_hours <- full_time_grid_eda %>%
+    anti_join(bike %>% distinct(datetime), by = "datetime") %>%
+    nrow()
+}
+
+bike <- bike %>%
+  mutate(
+    log_cnt = log1p(cnt),
+    hr_num = as.integer(as.character(hr)),
+    weather_group = case_when(
+      stringr::str_detect(as.character(weathersit), "^Quang") ~ "Tốt",
+      stringr::str_detect(as.character(weathersit), "^Sương") ~ "Trung bình",
+      TRUE ~ "Xấu"
+    ) %>% factor(levels = c("Tốt", "Trung bình", "Xấu"))
+  ) %>%
+  arrange(datetime)
+```
+
+## Cấu trúc và mức độ cân bằng của biến phân loại
+
+Số quan sát giữa các mức của biến phân loại có thể không bằng nhau. Việc kiểm tra mức độ cân bằng giúp phát hiện nhóm hiếm và tránh diễn giải quá mức đối với các nhóm có rất ít quan sát, đặc biệt là các mức thời tiết xấu.
+
+```{r eda-categorical-frequency-plots, fig.height=7}
+selected_cat_vars <- c(
+  "season", "yr", "holiday", "workingday", "weathersit"
+)
+
+categorical_plot_data <- purrr::map_dfr(selected_cat_vars, function(v) {
+  bike %>%
+    transmute(Muc = as.character(.data[[v]])) %>%
+    count(Muc, name = "Tan_so") %>%
+    mutate(Bien = v)
+})
+
+ggplot(categorical_plot_data, aes(x = Muc, y = Tan_so)) +
+  geom_col() +
+  facet_wrap(~ Bien, scales = "free_x", ncol = 2) +
+  labs(
+    title = "Tần số của các biến phân loại chính",
+    x = NULL,
+    y = "Số quan sát"
+  ) +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+```
+
+Các biến `season` và `yr` có phân bố khá cân bằng. Ngược lại, `holiday` và`weathersi`t mất cân bằng rõ, đặc biệt nhóm ngày lễ và thời tiết rất xấu có rất ít quan sát.
+
+## Phân phối của các biến thời tiết
+
+```{r eda-weather-distributions, fig.height=5}
+weather_long <- bike %>%
+  select(temp, hum, windspeed) %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "Bien",
+    values_to = "Gia_tri"
+  )
+
+ggplot(weather_long, aes(x = Gia_tri)) +
+  geom_histogram(bins = 40, boundary = 0) +
+  facet_wrap(~ Bien, scales = "free_y", ncol = 3) +
+  labs(
+    title = "Phân phối các biến thời tiết",
+    x = "Giá trị",
+    y = "Tần số"
+  )
+```
+
+**Nhận xét:** `temp` phân bố chủ yếu ở mức trung bình, `hum` tập trung nhiều ở mức khá cao, trong khi `windspeed` lệch phải với phần lớn quan sát ở mức thấp.
+
+## Phân phối của `cnt` và `log(1+cnt)`
+
+```{r distribution-response, fig.show='hold', out.width='49%'}
+ggplot(bike, aes(x = cnt)) +
+  geom_histogram(bins = 60, fill = "grey75", color = "black") +
+  labs(
+    title = "Phân phối tổng số lượt thuê xe theo giờ",
+    x = "cnt",
+    y = "Tần số"
+  )
+
+ggplot(bike, aes(x = log_cnt)) +
+  geom_histogram(bins = 60, fill = "grey75", color = "black") +
+  labs(
+    title = "Phân phối log(1 + cnt)",
+    x = "log(1 + cnt)",
+    y = "Tần số"
+  )
+```
+
+`cnt` lệch phải rõ rệt và các giá trị lớn có thể chi phối kết quả mô hình. Vì vậy, phép biến đổi `log(1 + cnt)` được xem xét nhằm thu hẹp các giá trị lớn, giảm độ lệch và hỗ trợ ổn định phương sai, qua đó phù hợp hơn với giả định của mô hình tuyến tính. Việc cộng 1 giúp phép biến đổi áp dụng được khi cnt = 0.
+
+## Nhu cầu thuê xe theo thời gian
+
+### Xu hướng trung bình theo ngày
+
+```{r daily-trend}
+daily_demand <- bike %>%
+  group_by(dteday) %>%
+  summarise(
+    Tong_luot_thue = sum(cnt),
+    Luot_thue_trung_binh_gio = mean(cnt),
+    So_gio_quan_sat = n(),
+    .groups = "drop"
+  )
+
+ggplot(daily_demand, aes(x = dteday, y = Luot_thue_trung_binh_gio)) +
+  geom_line(alpha = 0.45) +
+  geom_smooth(se = FALSE, span = 0.08) +
+  labs(
+    title = "Nhu cầu thuê xe trung bình theo ngày",
+    subtitle = "Sử dụng trung bình theo giờ để hạn chế ảnh hưởng của các giờ không xuất hiện",
+    x = "Ngày",
+    y = "Số lượt thuê trung bình mỗi giờ"
+  )
+```
+
+Nhu cầu thuê xe có xu hướng tăng theo thời gian và năm 2012 nhìn chung cao hơn năm 2011, đồng thời thể hiện tính mùa vụ với mức thuê giảm vào đầu và cuối năm.
+
+### Xu hướng theo tháng và năm
+
+Biểu đồ theo tháng và năm giúp tách đồng thời hai đặc điểm: mùa vụ trong năm và sự thay đổi quy mô nhu cầu giữa năm 2011 và 2012.
+
+```{r monthly-year-profile}
+monthly_year_profile <- bike %>%
+  group_by(yr, mnth) %>%
+  summarise(
+    mean_cnt = mean(cnt),
+    median_cnt = median(cnt),
+    .groups = "drop"
+  )
+
+ggplot(
+  monthly_year_profile,
+  aes(x = mnth, y = mean_cnt, group = yr, linetype = yr)
+) +
+  geom_line(linewidth = 0.9) +
+  geom_point(size = 1.7) +
+  labs(
+    title = "Nhu cầu thuê xe trung bình theo tháng và năm",
+    x = "Tháng",
+    y = "Số lượt thuê trung bình",
+    linetype = "Năm"
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+Nhu cầu thuê xe trung bình năm 2012 cao hơn năm 2011 ở tất cả các tháng, đồng thời đều tăng vào giữa năm và giảm vào cuối năm. Ngoài ra, đường của năm 2012 cao hơn 2011 ở tất cả các tháng, có thể thấy rằng biến `yr` không chỉ phản ánh yếu tố thời gian mà còn có thể đại diện cho xu hướng tăng trưởng của hệ thống. \### Nhu cầu trung bình theo giờ và ngày làm việc
+
+```{r hourly-profile}
+hourly_profile <- bike %>%
+  group_by(hr, workingday) %>%
+  summarise(
+    mean_cnt = mean(cnt),
+    median_cnt = median(cnt),
+    .groups = "drop"
+  )
+
+ggplot(hourly_profile, aes(x = hr, y = mean_cnt, group = workingday, linetype = workingday)) +
+  geom_line(linewidth = 0.9) +
+  geom_point(size = 1.5) +
+  labs(
+    title = "Nhu cầu thuê xe trung bình theo giờ",
+    subtitle = "So sánh ngày làm việc và ngày không làm việc",
+    x = "Giờ trong ngày",
+    y = "Số lượt thuê trung bình",
+    linetype = "Loại ngày"
+  ) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5))
+```
+
+Vào ngày làm việc, nhu cầu thuê xe tăng mạnh vào giờ đi làm buổi sáng và giờ tan tầm buổi chiều. Ngược lại, vào ngày không làm việc, nhu cầu tập trung chủ yếu từ trưa đến đầu giờ chiều. \### Nhu cầu theo giờ và mùa
+
+```{r eda-hour-season-profile}
+hour_season_profile <- bike %>%
+  group_by(season, hr) %>%
+  summarise(
+    mean_cnt = mean(cnt),
+    se_cnt = sd(cnt) / sqrt(n()),
+    lower_ci = mean_cnt - 1.96 * se_cnt,
+    upper_ci = mean_cnt + 1.96 * se_cnt,
+    .groups = "drop"
+  )
+
+ggplot(
+  hour_season_profile,
+  aes(x = hr, y = mean_cnt, group = season, linetype = season)
+) +
+  geom_line(linewidth = 0.9) +
+  labs(
+    title = "Nhu cầu trung bình theo giờ trong từng mùa",
+    x = "Giờ",
+    y = "Số lượt thuê trung bình",
+    linetype = "Mùa"
+  ) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5))
+```
+
+Ở cả bốn mùa, nhu cầu thuê xe đều có hai đỉnh rõ vào khoảng 8 giờ và 17–18 giờ. Mùa Xuân có mức thuê thấp nhất, trong khi các mùa còn lại cao hơn, đặc biệt vào giờ cao điểm chiều.
+
+### Bản đồ nhiệt theo tháng và giờ
+
+```{r month-hour-heatmap}
+month_hour <- bike %>%
+  group_by(mnth, hr) %>%
+  summarise(mean_cnt = mean(cnt), .groups = "drop")
+
+ggplot(month_hour, aes(x = hr, y = mnth, fill = mean_cnt)) +
+  geom_tile() +
+  labs(
+    title = "Bản đồ nhiệt nhu cầu thuê xe theo tháng và giờ",
+    x = "Giờ",
+    y = "Tháng",
+    fill = "Trung bình cnt"
+  ) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5))
+```
+
+Nhu cầu thuê xe thấp vào ban đêm, tăng rõ vào khoảng 7–8 giờ và đạt mức cao nhất vào 17–18 giờ. Mức thuê nhìn chung cao hơn trong các tháng giữa năm và thấp hơn vào đầu, cuối năm.
+
+## Nhu cầu theo các biến phân loại
+
+```{r violin-season-weather, fig.show='hold', out.width='49%'}
+ggplot(bike, aes(x = season, y = cnt, fill = season)) +
+  geom_violin(trim = FALSE,alpha = 0.45,color = "black") +
+  geom_boxplot(width = 0.18,outlier.alpha = 0.06,fill = "white",color = "black") +
+  scale_fill_brewer(palette = "Set2") +
+  labs(
+    title = "Phân phối số lượt thuê theo mùa",
+    x = "Mùa",
+    y = "cnt"
+  ) +
+  theme(
+    legend.position = "none"
+  )
+
+ggplot(bike, aes(x = weather_group, y = cnt, fill = weather_group)) +
+  geom_violin(trim = FALSE, alpha = 0.7) +
+  geom_boxplot(width = 0.12, fill = "white", outlier.alpha = 0.1) +
+  labs(
+    title = "Phân phối số lượt thuê theo nhóm thời tiết",
+    x = "Nhóm thời tiết",
+    y = "cnt"
+  ) +
+  theme(legend.position = "none")
+```
+
+```{r boxplots-working-year, fig.show='hold', out.width='49%'}
+ggplot(bike, aes(x = workingday, y = cnt)) +
+  geom_boxplot(outlier.alpha = 0.08) +
+  labs(
+    title = "Số lượt thuê theo trạng thái ngày làm việc",
+    x = NULL,
+    y = "cnt"
+  )
+
+ggplot(bike, aes(x = yr, y = cnt)) +
+  geom_boxplot(outlier.alpha = 0.08) +
+  labs(
+    title = "Số lượt thuê theo năm",
+    x = "Năm",
+    y = "cnt"
+  )
+```
+
+Nhu cầu thuê xe thấp nhất vào mùa Xuân và cao nhất vào mùa Thu. Điều kiện thời tiết tốt có số lượt thuê cao hơn nhóm trung bình và xấu. Phân phối giữa ngày làm việc và ngày không làm việc khá tương đồng, trong khi năm 2012 có mức thuê cao hơn rõ rệt so với năm 2011.
+
+## Quan hệ giữa biến thời tiết và số lượt thuê xe
+
+```{r weather-scatter-smooth, fig.height=7}
+weather_scatter_data <- bike %>%
+  slice_sample(n = min(6000, nrow(bike))) %>%
+  pivot_longer(
+    cols = c(temp,  hum, windspeed),
+    names_to = "Bien",
+    values_to = "Gia_tri"
+  )
+
+ggplot(weather_scatter_data, aes(x = Gia_tri, y = cnt)) +
+  geom_point(alpha = 0.08, size = 0.7) +
+  geom_smooth(method = "loess", se = FALSE, span = 0.75) +
+  facet_wrap(~ Bien, scales = "free_x", ncol = 2) +
+  labs(
+    title = "Quan hệ giữa điều kiện thời tiết và số lượt thuê xe",
+    x = "Giá trị biến thời tiết đã chuẩn hóa",
+    y = "cnt"
+  )
+```
+
+Nhu cầu thuê xe có xu hướng tăng theo nhiệt độ, nhưng giảm khi độ ẩm ở mức cao. Đối với tốc độ gió, lượng thuê cao nhất ở mức thấp đến trung bình và giảm rõ khi gió mạnh, cho thấy các mối quan hệ không hoàn toàn tuyến tính.
+
+## Mối liên hệ của nhu cầu thuê xe theo độ trễ thời gian
+
+```{r eda-lag24-scatter}
+lag24_pairs <- inner_join(
+  current_series,
+  bike %>%
+    transmute(
+      datetime = datetime + hours(24),
+      lagged_log_cnt_24 = log_cnt
+    ),
+  by = "datetime"
+)
+
+ggplot(
+  lag24_pairs,
+  aes(x = lagged_log_cnt_24, y = current_log_cnt)
+) +
+  geom_point(alpha = 0.08) +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(
+    title = "Nhu cầu thuê xe hiện tại và cùng giờ ngày hôm trước",
+    x = "log(1 + cnt) tại t - 24 giờ",
+    y = "log(1 + cnt) tại thời điểm t"
+  )
+```
+
+Nhu cầu tại thời điểm hiện tại có mối liên hệ thuận khá rõ với nhu cầu cùng giờ của ngày hôm trước, cho thấy dữ liệu có tính lặp lại theo chu kỳ 24 giờ.
+
+## Tổng hợp phát hiện EDA và định hướng mô hình hóa
+
+Kết quả cho thấy cnt có phân phối lệch phải và nhu cầu thuê xe thay đổi rõ theo giờ, mùa, năm, loại ngày và điều kiện thời tiết. Đây là cơ sở để cân nhắc biến đổi biến phản hồi, xử lý phù hợp các biến phân loại và kiểm tra các giả định sau khi xây dựng mô hình. Việc lựa chọn biến cuối cùng sẽ dựa trên kết quả mô hình thay vì chỉ dựa vào quan sát trực quan.
