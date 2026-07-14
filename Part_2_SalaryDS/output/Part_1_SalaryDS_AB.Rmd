@@ -1,11 +1,8 @@
 ---
-title: 'Phân tích Lương Data Science — Phần 1: Tiền xử lý & Khám phá Dữ liệu'
+title: "Phân tích Lương Data Science — Phần 1: Tiền xử lý & Khám phá Dữ liệu"
 author: "Nhóm nghiên cứu"
 date: "`r format(Sys.Date(), '%d/%m/%Y')`"
 output:
-  pdf_document:
-    toc: true
-    toc_depth: '3'
   html_document:
     theme: flatly
     toc: true
@@ -55,6 +52,22 @@ theme_set(
     )
 )
 
+# --------------------------------------------------------------------
+# Bảng màu cố định dùng xuyên suốt báo cáo (để mọi biểu đồ nhất quán về
+# màu sắc, tránh mỗi biểu đồ một palette rời rạc):
+#   - Biến CÓ THỨ TỰ (ordinal: experience_level, company_size, remote_ratio)
+#     dùng thang màu đơn sắc (sequential) — Blues / Greens / Oranges — vì
+#     thứ tự tự nhiên của biến khớp với độ đậm nhạt của thang màu.
+#   - Biến KHÔNG CÓ THỨ TỰ (nominal: job_category, company_region,
+#     employment_type) dùng MỘT bảng màu định tính cố định PAL_NOMINAL,
+#     áp dụng giống nhau cho mọi biểu đồ, để không ngụ ý một thứ tự nào.
+# --------------------------------------------------------------------
+PAL_NOMINAL <- c("#4E79A7", "#F28E2B", "#59A14F", "#E15759",
+                  "#B07AA1", "#76B7B2", "#EDC948")
+
+scale_fill_nominal <- function(...) scale_fill_manual(values = PAL_NOMINAL, ...)
+scale_color_nominal <- function(...) scale_color_manual(values = PAL_NOMINAL, ...)
+
 # Winsorize 1%–99% (Sheather 2009, §3.2.3)
 winsorize <- function(x, low = 0.01, high = 0.99) {
   q <- quantile(x, c(low, high), na.rm = TRUE)
@@ -67,6 +80,31 @@ winsorize <- function(x, low = 0.01, high = 0.99) {
 # "could not find function fmt" khi knit tuần tự từ trên xuống.
 fmt <- function(x) paste0("$", format(round(x), big.mark = ","))
 ```
+
+------------------------------------------------------------------------
+
+# Giới thiệu bộ dữ liệu và mục tiêu phân tích
+
+Bộ dữ liệu **Data Science Job Salaries** (Kaggle, 2022) ghi nhận mức lương của các vị trí việc làm trong lĩnh vực khoa học dữ liệu trên phạm vi toàn cầu, giai đoạn 2020–2022. Mỗi quan sát là một hợp đồng lao động, gắn với cấp độ kinh nghiệm (`experience_level`), hình thức làm việc (`employment_type`), chức danh cụ thể (`job_title`), mức lương gốc và mức lương đã quy đổi sang USD (`salary_in_usd`), quốc gia cư trú của người lao động và quốc gia đặt trụ sở công ty, tỷ lệ làm việc từ xa (`remote_ratio`), và quy mô công ty (`company_size`). Biến mục tiêu của toàn bộ phân tích là **`salary_in_usd`** — mức lương quy đổi sang USD, được chọn thay vì lương gốc (`salary`) vì đảm bảo tính so sánh được giữa các quốc gia và loại tiền tệ khác nhau.
+
+Bộ dữ liệu gồm 607 quan sát và 11 biến gốc; bảng mô tả chi tiết từng biến được trình bày ở mục "Khám phá ban đầu" ngay dưới đây.
+
+## Mục tiêu phân tích
+
+*Mục tiêu tổng quát:* Phân tích khám phá dữ liệu (EDA) và xây dựng các mô hình dự đoán nhằm xác định và đánh giá những yếu tố ảnh hưởng đến mức lương ở các vị trí việc làm trong lĩnh vực khoa học dữ liệu trên phạm vi toàn cầu.
+
+*Mục tiêu cụ thể:*
+
+1.  Tiền xử lý dữ liệu: kiểm tra và xử lý dữ liệu khuyết, dữ liệu trùng lặp, chuẩn hóa các biến định lượng, mã hóa các biến phân loại, và gộp nhóm chức danh công việc một cách hợp lý để giảm số chiều và tăng độ tin cậy của mô hình.
+2.  Thực hiện phân tích khám phá dữ liệu (EDA), bao gồm thống kê mô tả và trực quan hóa, nhằm nắm bắt đặc điểm phân phối của biến mục tiêu và mối quan hệ **đôi một (bivariate)** giữa mức lương với từng biến dự báo.
+3.  Lựa chọn và áp dụng các phương pháp phân tích thống kê phù hợp để: (i) xác định các yếu tố ảnh hưởng đến mức lương; (ii) so sánh mức lương giữa các nhóm nghề nghiệp, mức kinh nghiệm, quy mô công ty, hình thức làm việc và khu vực địa lý; (iii) phân tích xu hướng thay đổi mức lương theo thời gian (2020–2022).
+4.  Chia dữ liệu thành tập huấn luyện và tập kiểm định để phục vụ xây dựng và đánh giá mô hình một cách khách quan (thực hiện ở Phần 2).
+5.  Xây dựng ít nhất hai mô hình hồi quy để dự đoán mức lương (OLS, Ridge, LASSO, Elastic Net hoặc các phương pháp phù hợp khác), đồng thời kiểm định các giả định BLUE của mô hình hồi quy tuyến tính (Phần 2–3).
+6.  Đánh giá và so sánh các mô hình bằng các chỉ số RMSE, MAE và R², từ đó lựa chọn mô hình dự đoán tốt nhất kèm giải thích căn cứ lựa chọn.
+7.  Diễn giải ý nghĩa của các biến quan trọng trong mô hình được chọn, làm rõ chiều hướng và mức độ ảnh hưởng của từng yếu tố đến mức lương.
+8.  Đề xuất các hướng cải thiện mô hình hoặc phương pháp phân tích bổ sung có tiềm năng mang lại kết quả tốt hơn.
+
+Phần 1 (tài liệu này) tập trung vào mục tiêu 1 và 2 — tiền xử lý và khám phá dữ liệu; các mục tiêu còn lại được thực hiện ở Phần 2–3.
 
 ------------------------------------------------------------------------
 
@@ -269,8 +307,8 @@ cat("\n--- employee_residence ---\n");       print(table(salary_df$employee_resi
 
 ```
 
-
 Xử lý gom nhóm các nhóm chức danh
+
 ```{r}
 library(dplyr)
 library(stringr)
@@ -321,7 +359,6 @@ salary_df$job_category <- factor(salary_df$job_category)
 salary_df$seniority    <- factor(salary_df$seniority)
 ```
 
-
 ```{r}
 table(salary_df$job_category)
 ```
@@ -340,6 +377,7 @@ p1 <- ggplot(salary_df, aes(x = job_category, y = salary_in_usd, fill = job_cate
 
 print(p1)
 ```
+
 ```{r}
 p2 <- ggplot(salary_df, aes(x = salary_in_usd, fill = job_category)) +
   geom_density(alpha = 0.6) +
@@ -391,6 +429,7 @@ ggplot(salary_df, aes(x = seniority, fill = experience_level)) +
   ) +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 ```
+
 Biến phái sinh `seniority` (dùng riêng để đối chiếu ở trên) được quyết định loại bỏ khỏi không gian đặc trưng do có sự trùng lặp thông tin lớn với biến `experience_level` có sẵn. Dữ liệu chứng minh `experience_level` đã làm tốt nhiệm vụ phân loại các cấp độ quản lý và nhân viên một cách chi tiết hơn. Việc loại bỏ này là bước cần thiết để tối ưu hóa mô hình, ngăn chặn nguy cơ nhiễu loạn và đa cộng tuyến mà không làm giảm đi mức độ dự đoán. Lưu ý: tín hiệu "vị trí quản lý/lãnh đạo" cũng không được tách thành nhóm riêng trong `job_category` (xem mục trên) — các chức danh quản lý được gộp vào nhóm chức năng gần nhất hoặc vào "Other" — đây là một giới hạn của cách gom nhóm hiện tại, được ghi nhận lại ở phần hạn chế của mô hình.
 
 ### Xử lý biến location
@@ -405,8 +444,8 @@ cat("Tỷ lệ trùng khớp company_location == employee_residence:",
 
 Tỷ lệ trùng khớp `r round(overlap_rate * 100, 1)`% xác nhận hai biến mang thông tin gần như trùng lặp hoàn toàn — đưa cả hai vào mô hình sẽ gây đa cộng tuyến nghiêm trọng. Nhóm áp dụng chiến lược hai bước:
 
-1. **Gom nhóm `company_location` → `company_region`**: trước tiên phân loại chi tiết theo chuẩn **M49 Geoscheme** của Liên Hợp Quốc (UNSD, 2023) để kiểm tra đầy đủ 50+ country code.
-2. **Tạo biến nhị phân `cross_border`** = 1 khi nhân viên sống khác quốc gia với công ty — thể hiện thông tin duy nhất của `employee_residence` mà không trùng lặp với `company_region`.
+1.  **Gom nhóm `company_location` → `company_region`**: trước tiên phân loại chi tiết theo chuẩn **M49 Geoscheme** của Liên Hợp Quốc (UNSD, 2023) để kiểm tra đầy đủ 50+ country code.
+2.  **Tạo biến nhị phân `cross_border`** = 1 khi nhân viên sống khác quốc gia với công ty — thể hiện thông tin duy nhất của `employee_residence` mà không trùng lặp với `company_region`.
 
 ```{r location-region-def}
 # Hàm gom nhóm chi tiết theo UN M49 Geoscheme — dùng để kiểm tra độ phủ
@@ -460,7 +499,7 @@ cat("Phân phối company_region_detail (M49, 6 vùng):\n")
 print(sort(table(salary_df$company_region_detail), decreasing = TRUE))
 ```
 
-Từ dữ liệu trên cho thấy 4/6 vùng M49 có cỡ mẫu quá nhỏ, mất cân bằng nghiêm trọng khi phần lớn quan sát tập trung ở Bắc Mỹ và Châu Âu, trong khi các khu vực khác có kích thước mẫu quá nhỏ (n <= 8). Để tránh hiện tượng sai số chuẩn (standard error) bị phình to làm sai lệch kết quả kiểm định, báo cáo đã áp dụng chiến lược tái cấu trúc (re-binning). Các khu vực thiểu số được gom chung thành nhóm 'Phần còn lại của thế giới' (Rest of World). Phép biến đổi này giúp tạo ra 3 nhóm phân loại có kích thước mẫu đủ lớn, đảm bảo tính chặt chẽ và sức mạnh thống kê (statistical power) cho mô hình hồi quy và phân tích phương sai (ANOVA) ở các bước sau.
+Từ dữ liệu trên cho thấy 4/6 vùng M49 có cỡ mẫu quá nhỏ, mất cân bằng nghiêm trọng khi phần lớn quan sát tập trung ở Bắc Mỹ và Châu Âu, trong khi các khu vực khác có kích thước mẫu quá nhỏ (n \<= 8). Để tránh hiện tượng sai số chuẩn (standard error) bị phình to làm sai lệch kết quả kiểm định, báo cáo đã áp dụng chiến lược tái cấu trúc (re-binning). Các khu vực thiểu số được gom chung thành nhóm 'Phần còn lại của thế giới' (Rest of World). Phép biến đổi này giúp tạo ra 3 nhóm phân loại có kích thước mẫu đủ lớn, đảm bảo tính chặt chẽ và sức mạnh thống kê (statistical power) cho mô hình hồi quy và phân tích phương sai (ANOVA) ở các bước sau.
 
 ```{r location-create-vars}
 cat("\nPhân phối company_region (3 nhóm dùng cho mô hình):\n")
@@ -469,6 +508,7 @@ print(sort(table(salary_df$company_region), decreasing = TRUE))
 cat("\nTỷ lệ cross_border (làm việc xuyên quốc gia):",
     round(mean(salary_df$cross_border) * 100, 1), "%\n")
 ```
+
 Sau khi gộp, `company_region` còn 3 nhóm: **Northern_America** (346 quan sát), **Europe** (157 quan sát), và **Rest_of_World** — gộp từ Asia, Latin America, Oceania, Africa và Other (tổng khoảng 62 quan sát, mỗi vùng gốc chỉ 2–44 quan sát). `company_region_detail` (6 vùng M49) chỉ giữ lại để tra cứu/kiểm tra, không đưa vào tập dữ liệu mô hình.
 
 ```{r location-drop-originals}
@@ -617,7 +657,6 @@ outliers_df |>
 
 Qua quan sát ta thấy điểm chung lớn nhất và dễ thấy nhất là cả 10/10 cá nhân có mức lương cao nhất tập dữ liệu đều làm việc tại Bắc Mỹ (Northern_America). Tuy nhiên ta thấy có 3 quan trắc dù ở mức kinh nghiệm "Middle" nhưng lại có mức lương đến nửa triệu đô 1 năm, nên ta đi sâu vào nhóm "Middle" để quan sát thêm.
 
-
 ```{r outlier-composition}
 # Dùng trực tiếp toàn bộ tập dữ liệu salary_model
 ggplot(salary_model, aes(x = salary_in_usd)) +
@@ -648,7 +687,6 @@ ggplot(salary_model, aes(x = salary_in_usd)) +
   # Vẽ đường ranh giới cảnh báo màu đỏ tại ngưỡng 400k áp dụng cho tất cả các khung hình
   geom_vline(xintercept = 400000, color = "red", linetype = "dashed", linewidth = 1)
 ```
-
 
 ```{r outlier-explain-stats}
 # Số liệu dùng trực tiếp trong đoạn diễn giải bên dưới — tính động để luôn
@@ -776,6 +814,8 @@ Sau tiền xử lý, tập dữ liệu mô hình còn `r nrow(salary_model)` qua
 
 # PHẦN B: PHÂN TÍCH KHÁM PHÁ DỮ LIỆU (EDA)
 
+Phần này khám phá dữ liệu theo hai tầng: trước tiên là đặc điểm phân phối của biến mục tiêu `salary_in_usd` (mục "Thống kê mô tả" và "Phân phối biến mục tiêu"), sau đó là quan hệ **đôi một (bivariate)** giữa `salary_in_usd` và lần lượt từng biến dự báo — trực quan hóa bằng boxplot/scatter/line chart theo từng mục, rồi kiểm định thống kê chính thức cho toàn bộ các cặp quan hệ đó trong mục "Kiểm định quan hệ đôi một". Xen giữa là hai biểu đồ tương tác (interaction) giữa các cặp nhân tố nhằm phát hiện sớm những dấu hiệu mà mô hình hồi quy cộng tính (additive) đơn thuần có thể bỏ sót. Toàn bộ phần này phục vụ trực tiếp mục tiêu phân tích 2 và 3 đã nêu ở đầu tài liệu.
+
 ## Thống kê mô tả biến mục tiêu
 
 ```{r desc-stats}
@@ -846,6 +886,40 @@ ggplot(salary_model, aes(x = log(salary_in_usd))) +
 
 Histogram xác nhận phân phối `salary_in_usd` lệch phải: đuôi phải kéo dài do một nhóm nhỏ chuyên gia cấp cao nhận mức lương rất cao. Khi biến đổi log, phân phối trở nên đối xứng hơn rõ rệt — gợi ý quan trọng cho bước xây dựng mô hình, vì OLS với Y gốc có thể vi phạm giả định phân phối chuẩn phần dư, và phiên bản log(Y) thường cải thiện giả định BLUE trong bài toán lương (Sheather 2009, §3.4).
 
+Để đánh giá định lượng mức độ lệch và độ phù hợp với phân phối chuẩn, ta bổ sung QQ-plot và hệ số bất đối xứng (skewness) cho cả `salary_in_usd` gốc và `log(salary_in_usd)`:
+
+```{r dist-qq}
+# Hệ số bất đối xứng mẫu (sample skewness) — công thức chuẩn, không cần
+# thêm gói ngoài (tương đương moments::skewness / e1071::skewness, type = 3)
+skewness <- function(x) {
+  n <- length(x)
+  m <- mean(x)
+  s <- sd(x)
+  (sum((x - m)^3) / n) / s^3
+}
+
+skew_raw <- skewness(sal)
+skew_log <- skewness(log(sal))
+
+qq_raw <- ggplot(salary_model, aes(sample = salary_in_usd)) +
+  stat_qq(color = "steelblue", alpha = 0.6) +
+  stat_qq_line(color = "red", linewidth = 0.8) +
+  labs(title = "QQ-plot: salary_in_usd",
+       subtitle = paste0("Skewness = ", round(skew_raw, 2)),
+       x = "Phân vị lý thuyết (Normal)", y = "Phân vị mẫu")
+
+qq_log <- ggplot(salary_model, aes(sample = log(salary_in_usd))) +
+  stat_qq(color = "mediumpurple", alpha = 0.6) +
+  stat_qq_line(color = "red", linewidth = 0.8) +
+  labs(title = "QQ-plot: log(salary_in_usd)",
+       subtitle = paste0("Skewness = ", round(skew_log, 2)),
+       x = "Phân vị lý thuyết (Normal)", y = "Phân vị mẫu")
+
+qq_raw + qq_log
+```
+
+Với `salary_in_usd` gốc, hệ số bất đối xứng là **`r round(skew_raw, 2)`** (skewness \> 0 xác nhận lệch phải), và các điểm trên QQ-plot lệch rõ khỏi đường chuẩn ở đuôi phải — bằng chứng trực quan cho vi phạm giả định phân phối chuẩn. Sau biến đổi log, skewness giảm còn **`r round(skew_log, 2)`**, gần 0 hơn nhiều, và các điểm trên QQ-plot bám sát đường chuẩn hơn đáng kể trên phần lớn miền giá trị. Kết quả này củng cố khuyến nghị cân nhắc mô hình hồi quy trên `log(salary_in_usd)` ở Phần 2–3.
+
 ## Lương theo cấp độ kinh nghiệm
 
 ```{r eda-experience-box}
@@ -893,7 +967,7 @@ ggplot(salary_model,
            fill = job_category)) +
   geom_boxplot(alpha = 0.75, outlier.alpha = 0.4) +
   scale_y_continuous(labels = label_comma(prefix = "$")) +
-  scale_fill_brewer(palette = "Set2") +
+  scale_fill_nominal() +
   coord_flip() +
   labs(
     title    = "Phân phối lương theo nhóm chức danh",
@@ -978,7 +1052,7 @@ p_remote <- ggplot(salary_model,
        aes(x = remote_ratio, y = salary_in_usd, fill = remote_ratio)) +
   geom_boxplot(alpha = 0.75, outlier.alpha = 0.4) +
   scale_y_continuous(labels = label_comma(prefix = "$")) +
-  scale_fill_brewer(palette = "Oranges") +
+  scale_fill_brewer(palette = "Blues") +
   labs(title = "Lương theo chế độ làm việc",
        x = NULL, y = "Lương (USD)", fill = NULL) +
   theme(legend.position = "none")
@@ -987,9 +1061,9 @@ p_size <- ggplot(salary_model,
        aes(x = company_size, y = salary_in_usd, fill = company_size)) +
   geom_boxplot(alpha = 0.75, outlier.alpha = 0.4) +
   scale_y_continuous(labels = label_comma(prefix = "$")) +
-  scale_fill_manual(values = c("Small"  = "#74c476",
-                                "Medium" = "#31a354",
-                                "Large"  = "#006d2c")) +
+  scale_fill_manual(values = c("Small"  = "#9ecae1",
+                                "Medium" = "#4292c6",
+                                "Large"  = "#08519c")) +
   labs(title = "Lương theo quy mô công ty",
        x = NULL, y = NULL, fill = NULL) +
   theme(legend.position = "none")
@@ -1025,7 +1099,7 @@ p_region_box <- ggplot(salary_model,
            y = salary_in_usd, fill = company_region)) +
   geom_boxplot(alpha = 0.75, outlier.alpha = 0.4) +
   scale_y_continuous(labels = label_comma(prefix = "$")) +
-  scale_fill_brewer(palette = "Purples") +
+  scale_fill_nominal() +
   labs(title = "Phân phối lương theo khu vực công ty",
        subtitle = "Sắp xếp theo trung vị",
        x = NULL, y = "Lương (USD)", fill = NULL) +
@@ -1035,7 +1109,7 @@ p_region_density <- ggplot(salary_model, aes(x = salary_in_usd, fill = company_r
   geom_density(alpha = 0.6) +
   facet_wrap(~company_region, ncol = 1) +
   scale_x_continuous(labels = label_comma(prefix = "$")) +
-  scale_fill_brewer(palette = "Purples") +
+  scale_fill_nominal() +
   labs(title = "Mật độ phân phối lương theo khu vực",
        x = "Lương (USD)", y = "Mật độ") +
   theme(legend.position = "none")
@@ -1078,7 +1152,7 @@ p_emp <- ggplot(salary_model,
            y = salary_in_usd, fill = employment_type)) +
   geom_boxplot(alpha = 0.75, outlier.alpha = 0.4) +
   scale_y_continuous(labels = label_comma(prefix = "$")) +
-  scale_fill_brewer(palette = "Greens") +
+  scale_fill_nominal() +
   labs(title = "Lương theo loại hợp đồng",
        subtitle = "PartTime/Contract/Freelance: cỡ mẫu rất nhỏ",
        x = NULL, y = "Lương (USD)", fill = NULL) +
@@ -1102,27 +1176,56 @@ grid.arrange(p_emp, p_cb, ncol = 2)
 
 ## Xu hướng theo năm × cấp độ kinh nghiệm
 
-```{r eda-interaction-year-exp}
-year_exp <- salary_model |>
-  group_by(work_year, experience_level) |>
-  summarise(Mean = mean(salary_in_usd), n = n(), .groups = "drop")
-
-ggplot(year_exp, aes(x = work_year, y = Mean,
-                      color = experience_level, group = experience_level)) +
-  geom_line(linewidth = 1) +
-  geom_point(aes(size = n)) +
+```{r eda-interaction-year-exp, fig.height=5}
+ggplot(salary_model |> mutate(work_year_f = factor(work_year)),
+       aes(x = work_year_f, y = salary_in_usd, fill = experience_level)) +
+  geom_boxplot(alpha = 0.85, outlier.alpha = 0.4,
+               position = position_dodge(preserve = "single")) +
   scale_y_continuous(labels = label_comma(prefix = "$")) +
-  scale_x_continuous(breaks = unique(year_exp$work_year)) +
-  scale_color_brewer(palette = "Blues") +
+  scale_fill_brewer(palette = "Blues") +
   labs(
-    title    = "Xu hướng lương theo năm và cấp độ kinh nghiệm",
-    subtitle = "Kích thước điểm = số quan sát trong ô",
-    x = "Năm", y = "Lương trung bình (USD)",
-    color = "Kinh nghiệm", size = "n"
+    title    = "Tương tác work_year × experience_level",
+    subtitle = "Khoảng cách giữa các hộp thay đổi khác nhau qua các năm ⇒ dấu hiệu tương tác",
+    x = "Năm", y = "Lương (USD)",
+    fill = "Kinh nghiệm"
   )
 ```
 
-Biểu đồ cho thấy tất cả các nhóm đều có xu hướng tăng từ 2020 đến 2022, nhưng mức tăng không đồng đều. Khoảng cách giữa **Senior/Exec** và **Entry/Mid** ngày càng nới rộng — nhân sự cấp cao hưởng lợi nhiều hơn từ sự tăng trưởng của ngành. Đây gợi ý một *interaction effect* tiềm năng giữa `work_year` và `experience_level` — sẽ kiểm tra khi xây dựng mô hình.
+Boxplot cho thấy tất cả các nhóm kinh nghiệm đều có trung vị tăng từ 2020 đến 2022, nhưng mức tăng không đồng đều. Khoảng cách giữa hộp **Senior/Exec** và hộp **Entry/Mid** ngày càng nới rộng qua từng năm — nhân sự cấp cao hưởng lợi nhiều hơn từ sự tăng trưởng của ngành. Đây gợi ý một *interaction effect* tiềm năng giữa `work_year` và `experience_level` — sẽ kiểm tra khi xây dựng mô hình.
+
+## Biểu đồ tương tác giữa các cặp nhân tố
+
+Ngoài cặp `work_year` × `experience_level` ở trên, hai cặp nhân tố khác có khả năng tương tác đáng chú ý là `experience_level` × `job_category` (liệu mức "thưởng" cho kinh nghiệm có giống nhau giữa các nhóm chức danh không) và `experience_level` × `company_region` (liệu chênh lệch lương theo kinh nghiệm có đồng đều giữa các khu vực không). Boxplot theo cặp nhóm bên dưới cho phép so sánh trực tiếp cả trung vị lẫn độ trải rộng giữa các tổ hợp nhóm; nếu độ chênh lệch giữa các hộp thay đổi không đồng đều qua các mức của biến thứ nhất, đó là dấu hiệu trực quan của hiệu ứng tương tác.
+
+```{r eda-interaction-exp-jobcat, fig.height=5.5}
+ggplot(salary_model, aes(x = experience_level, y = salary_in_usd, fill = job_category)) +
+  geom_boxplot(alpha = 0.85, outlier.alpha = 0.4,
+               position = position_dodge(preserve = "single")) +
+  scale_y_continuous(labels = label_comma(prefix = "$")) +
+  scale_fill_nominal() +
+  labs(
+    title    = "Tương tác experience_level × job_category",
+    subtitle = "Khoảng cách giữa các hộp thay đổi khác nhau qua các cấp độ kinh nghiệm ⇒ dấu hiệu tương tác",
+    x = "Cấp độ kinh nghiệm", y = "Lương (USD)",
+    fill = "Nhóm chức danh"
+  )
+```
+
+```{r eda-interaction-exp-region, fig.height=5.5}
+ggplot(salary_model, aes(x = experience_level, y = salary_in_usd, fill = company_region)) +
+  geom_boxplot(alpha = 0.85, outlier.alpha = 0.4,
+               position = position_dodge(preserve = "single")) +
+  scale_y_continuous(labels = label_comma(prefix = "$")) +
+  scale_fill_nominal() +
+  labs(
+    title    = "Tương tác experience_level × company_region",
+    subtitle = "Khoảng cách giữa các hộp thay đổi khác nhau qua các cấp độ kinh nghiệm ⇒ dấu hiệu tương tác",
+    x = "Cấp độ kinh nghiệm", y = "Lương (USD)",
+    fill = "Khu vực công ty"
+  )
+```
+
+Ở cặp `experience_level` × `job_category`, chênh lệch trung vị giữa các nhóm chức danh không đồng đều qua các cấp độ kinh nghiệm — một số nhóm (ví dụ ML Engineer) có mức tăng trung vị theo kinh nghiệm rõ hơn các nhóm khác, gợi ý "phần thưởng" cho kinh nghiệm không đồng đều giữa các vị trí. Ở cặp `experience_level` × `company_region`, hộp của nhóm Executive tại Bắc Mỹ tách biệt rõ (trung vị cao hơn hẳn) so với các khu vực còn lại, trong khi ở nhóm Entry/Mid khoảng cách giữa các khu vực hẹp hơn nhiều — cũng là dấu hiệu tương tác tiềm năng. Cả hai quan sát này đều là **gợi ý thăm dò từ trực quan hóa**, cần được kiểm định chính thức bằng số hạng tương tác (interaction term) trong mô hình hồi quy ở Phần 2–3 trước khi kết luận; với cỡ mẫu một số tổ hợp nhóm khá nhỏ, kết luận cần thận trọng.
 
 ## Ma trận tương quan
 
@@ -1326,18 +1429,18 @@ p1 <- ggplot(salary_model, aes(x = experience_level, fill = experience_level)) +
   theme(legend.position = "none")
 
 p2 <- ggplot(salary_model, aes(x = employment_type, fill = employment_type)) +
-  geom_bar() + scale_fill_brewer(palette = "Greens") +
+  geom_bar() + scale_fill_nominal() +
   labs(title = "Loại hợp đồng", x = NULL, y = NULL) +
   theme(legend.position = "none")
 
 p3 <- ggplot(salary_model, aes(x = company_size, fill = company_size)) +
   geom_bar() +
-  scale_fill_manual(values = c("Small"="#74c476","Medium"="#31a354","Large"="#006d2c")) +
+  scale_fill_manual(values = c("Small"="#9ecae1","Medium"="#4292c6","Large"="#08519c")) +
   labs(title = "Quy mô công ty", x = NULL, y = "n") +
   theme(legend.position = "none")
 
 p4 <- ggplot(salary_model, aes(x = remote_ratio, fill = remote_ratio)) +
-  geom_bar() + scale_fill_brewer(palette = "Oranges") +
+  geom_bar() + scale_fill_brewer(palette = "Blues") +
   labs(title = "Chế độ làm việc", x = NULL, y = NULL) +
   theme(legend.position = "none")
 
@@ -1346,7 +1449,7 @@ p5 <- salary_model |>
   ggplot(aes(x = reorder(job_category, n), y = n, fill = job_category)) +
   geom_col(show.legend = FALSE) +
   geom_text(aes(label = n), hjust = -0.2, size = 3.2) +
-  scale_fill_brewer(palette = "Set2") +
+  scale_fill_nominal() +
   coord_flip() +
   ylim(0, max(count(salary_model, job_category)$n) * 1.2) +
   labs(title = "Nhóm chức danh", x = NULL, y = "n")
@@ -1396,6 +1499,17 @@ data.frame(
 
 Phần 1 hoàn thành hai nhiệm vụ nền tảng. Về tiền xử lý: bộ dữ liệu sạch từ đầu, nhưng cần xử lý kỹ số lượng biến phân loại và mức độ chi tiết của nhóm chức danh — hai quyết định này ảnh hưởng trực tiếp đến chất lượng mô hình. Về EDA: ba yếu tố nổi bật quyết định mức lương trong ngành Data Science là **kinh nghiệm** (yếu tố mạnh nhất), **loại chức danh** (`r job_stats$job_category[1]` dẫn đầu về trung vị), và **xu hướng tăng theo thời gian** (2020→2022). Phân phối lệch phải của `salary_in_usd` gợi ý mô hình nên kiểm tra cả phiên bản `log(salary_in_usd)` làm biến mục tiêu — bước này sẽ được thực hiện khi kiểm định BLUE ở Phần 3.
 
+## Tóm tắt định hướng cho Phần 2–3
+
+Dựa trên các phát hiện của Phần 1, những điểm sau cần được mang sang và xử lý chính thức ở các phần tiếp theo (xây dựng và đánh giá mô hình):
+
+1.  **Biến mục tiêu**: cân nhắc song song hai phiên bản `salary_in_usd` và `log(salary_in_usd)` khi kiểm định giả định BLUE, do skewness của bản gốc lệch đáng kể khỏi 0 (mục "Phân phối biến mục tiêu").
+2.  **Biến dự báo chính**: `experience_level` (tương quan mạnh nhất) và `job_category` (phân tầng lương rõ qua boxplot và kiểm định Kruskal–Wallis/ANOVA) nên được ưu tiên giữ trong mọi mô hình ứng viên.
+3.  **Hiệu ứng tương tác cần kiểm định chính thức**: `work_year` × `experience_level`, `experience_level` × `job_category`, và `experience_level` × `company_region` — cả ba đều cho dấu hiệu trực quan (đường không song song) ở Phần 1, nhưng chưa được kiểm định bằng số hạng tương tác trong mô hình hồi quy.
+4.  **Đa cộng tuyến**: kết quả VIF ở Phần 1 cần được theo dõi lại sau khi đưa các số hạng tương tác vào mô hình, vì tương tác có thể làm tăng VIF của các biến thành phần.
+5.  **Nhóm cỡ mẫu nhỏ**: `employment_type` (PartTime/Contract/Freelance) và job_category "Other" có cỡ mẫu nhỏ — hệ số hồi quy của các nhóm này cần được diễn giải thận trọng, có thể cân nhắc gộp nhóm thêm nếu mô hình không ổn định.
+6.  **Outlier đã qua one-sided winsorize (99th percentile)**: cần đối chiếu lại kết quả mô hình có/không winsorize để đánh giá mức độ nhạy cảm của kết luận với bước xử lý này.
+
 ------------------------------------------------------------------------
 
 # TÀI LIỆU THAM KHẢO
@@ -1406,6 +1520,6 @@ James, G., Witten, D., Hastie, T., & Tibshirani, R. (2023). *An Introduction to 
 
 Sheather, S. J. (2009). *A Modern Approach to Regression with R*. Springer.
 
-United Nations Statistics Division. (2023). *Standard country or area codes for statistical use (M49)*. United Nations. https://unstats.un.org/unsd/methodology/m49/
+United Nations Statistics Division. (2023). *Standard country or area codes for statistical use (M49)*. United Nations. <https://unstats.un.org/unsd/methodology/m49/>
 
 Zou, H., & Hastie, T. (2005). Regularization and variable selection via the elastic net. *Journal of the Royal Statistical Society: Series B*, 67(2), 301–320.
