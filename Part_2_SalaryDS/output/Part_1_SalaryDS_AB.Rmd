@@ -1,30 +1,1411 @@
-<!--
-## Giới thiệu bộ dữ liệu
+---
+title: 'Phân tích Lương Data Science — Phần 1: Tiền xử lý & Khám phá Dữ liệu'
+author: "Nhóm nghiên cứu"
+date: "`r format(Sys.Date(), '%d/%m/%Y')`"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: '3'
+  html_document:
+    theme: flatly
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+    toc_depth: 3
+    number_sections: true
+    df_print: paged
+    code_folding: hide
+---
 
-*(TODO: giới thiệu nguồn dữ liệu "Data Science Job Salaries" (Kaggle),
-607 quan trắc, 11 biến — xem mô tả biến trong đề bài.)*
-
-```{r p2-load-data}
-# TODO: doc du lieu, vi du:
-# salary_raw <- read.csv(here::here("Part_2_SalaryDS", "data", "raw", "ds_salaries.csv"))
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo       = FALSE,
+  message    = FALSE,
+  warning    = FALSE,
+  fig.width  = 9,
+  fig.height = 5,
+  fig.align  = "center",
+  dpi        = 150
+)
 ```
 
-## Tiền xử lý dữ liệu
+```{r packages}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(kableExtra)
+library(corrplot)
+library(car)
+library(scales)
+library(stringr)
+library(gridExtra)
+library(grid)
+library(broom)
+library(robustbase)
+library(patchwork) # Dùng để ghép các biểu đồ lại với nhau
 
-*(TODO: xử lý dữ liệu khuyết (nếu có), mã hóa biến phân loại, gộp nhóm
-`job_title` thành các nhóm hợp lý (vd: DA, DS, DE, ML, Manager, Khác, ...),
-loại bỏ cột chỉ số dòng không dùng.)*
+theme_set(
+  theme_minimal(base_size = 12) +
+    theme(
+      plot.title    = element_text(face = "bold", size = 13),
+      plot.subtitle = element_text(size = 11, color = "grey40"),
+      axis.title    = element_text(size = 11),
+      legend.position = "right"
+    )
+)
 
-```{r p2-preprocess}
-``` 
+# Winsorize 1%–99% (Sheather 2009, §3.2.3)
+winsorize <- function(x, low = 0.01, high = 0.99) {
+  q <- quantile(x, c(low, high), na.rm = TRUE)
+  pmax(pmin(x, q[2]), q[1])
+}
 
-## Phân tích khám phá dữ liệu (EDA)
-
-```{r p2-eda}
-# TODO: thong ke mo ta, phan phoi salary_in_usd, so sanh theo nhom, xu huong
-# theo thoi gian, ...
+# fmt() format tiền tệ — đặt ở đây (thay vì ở chunk desc-stats như trước) vì
+# được dùng ở nhiều chunk từ sớm (mục Outlier ở Phần A), trước cả khi tới
+# Phần B nơi nó được định nghĩa ban đầu. Định nghĩa sớm để tránh lỗi
+# "could not find function fmt" khi knit tuần tự từ trên xuống.
+fmt <- function(x) paste0("$", format(round(x), big.mark = ","))
 ```
 
-*(TODO: diễn giải các phát hiện chính từ EDA.)*
+------------------------------------------------------------------------
 
--->
+# PHẦN A: TIỀN XỬ LÝ DỮ LIỆU
+
+## Khám phá ban đầu
+
+```{r load-data}
+# knitr đặt working directory = thư mục chứa file .Rmd khi Knit, nên đường dẫn
+# tương đối phải tính từ đó. Thử vài biến thể tên file/độ sâu thư mục phổ biến
+# để không bị lỗi "cannot open the connection" chỉ vì lệch tên file hoặc cấu
+# trúc thư mục giữa các máy.
+csv_candidates <- c(
+  "../data/raw/ds_salaries.csv",
+  "../data/raw/ds-salaries.csv",
+  "data/raw/ds_salaries.csv",
+  "data/raw/ds-salaries.csv",
+  "../ds_salaries.csv",
+  "../ds-salaries.csv",
+  "ds_salaries.csv",
+  "ds-salaries.csv"
+)
+csv_found <- csv_candidates[file.exists(csv_candidates)]
+
+if (length(csv_found) == 0) {
+  stop(
+    "Khong tim thay file du lieu. Da thu cac duong dan sau (tinh tu working ",
+    "directory hien tai la thu muc chua file .Rmd khi Knit):\n  ",
+    paste(csv_candidates, collapse = "\n  "),
+    "\nWorking directory hien tai: ", getwd(),
+    "\n-> Hay dat file CSV (ds_salaries.csv hoac ds-salaries.csv) vao thu muc ",
+    "data/raw/ nam CUNG CAP voi thu muc chua file .Rmd nay, hoac sua lai duong ",
+    "dan trong chunk 'load-data'."
+  )
+}
+
+salary_raw <- read.csv(csv_found[1],
+                       stringsAsFactors = FALSE,
+                       row.names = 1)   # đọc cột đầu làm row names, không giữ lại
+```
+
+```{r overview-dim}
+cat("Số quan sát:", nrow(salary_raw), "\n")
+cat("Số biến    :", ncol(salary_raw), "\n")
+```
+
+```{r overview-structure}
+str(salary_raw)
+```
+
+```{r overview-head}
+head(salary_raw, 8) |>
+  kbl(caption = "8 quan sát đầu tiên của bộ dữ liệu gốc") |>
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                font_size = 12) |>
+  scroll_box(width = "100%")
+```
+
+Bộ dữ liệu **Data Science Job Salaries** (Kaggle, 2022) gồm `r nrow(salary_raw)` quan sát và `r ncol(salary_raw)` biến, ghi nhận thông tin về mức lương của các vị trí trong ngành Data Science từ năm 2020 đến 2022. Biến mục tiêu là `salary_in_usd` — mức lương quy đổi ra đô-la Mỹ, đảm bảo tính so sánh được giữa các quốc gia và loại tiền tệ khác nhau.
+
+```{r overview-describe}
+data.frame(
+  Biến      = names(salary_raw),
+  Kiểu      = sapply(salary_raw, class),
+  Mô_tả    = c(
+    "Năm ghi nhận dữ liệu lương",
+    "Cấp độ kinh nghiệm (EN/MI/SE/EX)",
+    "Loại hợp đồng (FT/PT/CT/FL)",
+    "Chức danh công việc",
+    "Lương trong đồng tiền địa phương",
+    "Đơn vị tiền tệ",
+    "Lương quy đổi sang USD — biến mục tiêu",
+    "Quốc gia cư trú của nhân viên",
+    "Tỷ lệ làm việc từ xa (0/50/100)",
+    "Quốc gia đặt trụ sở công ty",
+    "Quy mô công ty (S/M/L)"
+  ),
+  row.names = NULL
+) |>
+  kbl(caption = "Mô tả 11 biến trong bộ dữ liệu gốc") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), font_size = 12)
+```
+
+Bộ dữ liệu gồm 1 biến phụ thuộc `salary_in_usd` và 10 biến độc lập, trong đó có 2 biến là định lượng `work_year`, `remote_ratio` nhưng rời rạc và hữu hạn, 8 biến là biến định tính.
+
+## Kiểm tra dữ liệu thiếu
+
+```{r missing-check}
+missing_df <- data.frame(
+  Biến          = names(salary_raw),
+  Số_NA         = colSums(is.na(salary_raw)),
+  Tỷ_lệ_NA_pct = round(colMeans(is.na(salary_raw)) * 100, 2),
+  row.names     = NULL
+)
+
+missing_df |>
+  kbl(caption = "Tổng hợp dữ liệu thiếu theo từng biến") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), font_size = 12) |>
+  column_spec(3,
+              color = ifelse(missing_df$Số_NA > 0, "red", "darkgreen"),
+              bold  = TRUE)
+```
+
+```{r missing-total}
+total_missing <- sum(is.na(salary_raw))
+```
+
+Toàn bộ `r ncol(salary_raw)` biến đều không có giá trị thiếu — tổng cộng `r total_missing` NA.
+
+## Kiểm tra dữ liệu trùng lặp
+
+```{r duplicate-check}
+n_dup <- sum(duplicated(salary_raw))
+cat("Số hàng trùng lặp hoàn toàn:", n_dup, "\n")
+cat("Tỷ lệ:", round(n_dup / nrow(salary_raw) * 100, 2), "%\n")
+```
+
+```{r duplicate-show}
+if (n_dup > 0) {
+  dup_rows <- salary_raw[duplicated(salary_raw) | duplicated(salary_raw, fromLast = TRUE), ]
+  dup_rows |>
+    arrange(work_year, experience_level, job_title, salary_in_usd) |>
+    kbl(caption = paste0("Các hàng trùng lặp (", n_dup, " hàng)")) |>
+    kable_styling(bootstrap_options = c("striped", "hover"), font_size = 12) |>
+    scroll_box(width = "100%")
+} else {
+  cat("Không có hàng nào trùng lặp hoàn toàn.\n")
+}
+```
+
+```{r duplicate-remove}
+salary_raw <- salary_raw[!duplicated(salary_raw), ]
+cat("Số quan sát sau khi loại trùng lặp:", nrow(salary_raw), "\n")
+```
+
+Bộ dữ liệu `r if(n_dup == 0) "không có" else paste0("có", n_dup)` hàng trùng lặp hoàn toàn`r if(n_dup > 0) paste0(" — loại bỏ, còn lại ", nrow(salary_raw), " quan sát") else "."` Lưu ý: trong dữ liệu khảo sát lương, hai nhân viên khác nhau hoàn toàn có thể có cùng tổ hợp giá trị (cùng năm, cùng chức danh, cùng mức lương) — đây không phải lỗi nhập liệu. Tuy nhiên, hàng trùng lặp *hoàn toàn* trên tất cả `r ncol(salary_raw)` cột nhiều khả năng là dữ liệu nhập đôi, nên được loại bỏ.
+
+## Loại bỏ biến dư thừa
+
+Qua quan sát ban đầu, nhận thấy có 2 biến có vẻ sẽ không mang nhiều ý nghĩa cho mô hình là 2 biến `salary` (lương địa phương) và `salary_currency` (đơn vị tiền tệ tính lương), vì biến `salary` thì có vẻ đã được quy đổi qua biến phụ thuộc là biến `salary_in_usd` còn biến `salary_currency` thì được kết hợp với biến `salary` để quy đổi qua tiền lương theo USD, và biến này nếu được đặc trưng cho đất nước mà người khảo sát làm việc thì cũng có thể đã được thể hiện qua 2 biến `company_location` hoặc `employee_residence`.
+
+Theo mô tả dữ liệu, `salary_in_usd` là mức lương quy đổi sang USD (tính theo tỷ giá hối đoái chia cho tỷ giá USD trung bình của năm tương ứng, dựa trên dữ liệu từ fxdata.foorilla.com). Tuy nhiên trang fxdata.foorilla.com đã không còn tồn tại, và để kiểm chứng giả định răng biến `salary` đã quy đổi qua USD 1 cách tuyến tính theo tỷ giá đồng nhất, nhóm tính toán tỷ giá bằng cách chia lương đã quy đổi sang USD cho lương địa phương và so sánh tỷ giá này giữa các đơn vị tiền tệ và năm. Kết quả như bảng dưới đây:
+
+```{r}
+exchange_rate_check_fixed <- salary_raw %>%
+  mutate(
+    # Tính tỷ giá ngầm định gốc
+    implied_exchange_rate = salary_in_usd / salary,
+    # Làm tròn tỷ giá đến 3 chữ số thập phân để loại bỏ nhiễu
+    rounded_rate = round(implied_exchange_rate, 4) 
+  ) %>%
+  group_by(salary_currency, work_year) %>%
+  summarise(
+    min_rate = min(implied_exchange_rate),
+    max_rate = max(implied_exchange_rate),
+    mean_rate = mean(implied_exchange_rate),
+    # Đếm số lượng tỷ giá KHÁC NHAU dựa trên cột ĐÃ LÀM TRÒN
+    unique_rates_count = n_distinct(rounded_rate), 
+    .groups = "drop"
+  ) %>%
+  arrange(salary_currency, work_year)
+
+# Ép R in ra nhiều số thập phân hơn để thấy rõ min và max thực sự khác nhau đôi chút
+options(pillar.sigfig = 5) 
+print(exchange_rate_check_fixed, n = Inf)
+
+```
+
+Theo bảng trên, nếu lấy đến chữ số thập phân thứ tư, đa số các tỷ giá đều bằng nhau ở từng năm quan sát với từng đơn vị tiền tệ, có đồng EUR khi quan sát có sự sai số ở số thập phân thứ 4. Điều này có thể lý giải cho người thu thập dữ liệu, khi họ nhân tỷ giá đã làm tròn dẫn đến khi chia sẽ có sai số như vậy. Vì sai số là nhỏ nên nhóm chấp nhận kết quả `salary_in_usd` đã được tính và bỏ biến `salary` vì đã được quy đổi qua biến phụ thuộc.
+
+```{r drop-cols}
+# salary (đơn vị địa phương) và salary_currency bị loại:
+# hai biến này không thêm thông tin độc lập so với salary_in_usd;
+# salary_currency tạo thêm ~17 dummy không đóng góp thông tin dự báo riêng.
+salary_df <- salary_raw |>
+  select(-salary, -salary_currency)
+
+cat("Số biến sau khi loại:", ncol(salary_df), "\n")
+cat("Biến còn lại:", paste(names(salary_df), collapse = ", "), "\n")
+```
+
+Hai biến `salary` (lương địa phương) và `salary_currency` (đơn vị tiền tệ) bị loại vì chúng phụ thuộc hoàn toàn vào `salary_in_usd` — mọi thông tin về quy mô lương đã được quy đổi và gộp vào biến mục tiêu. Giữ lại biến tiền tệ chỉ đưa thêm \~17 dummy tiền tệ vào mô hình mà không đóng góp thông tin dự báo độc lập (Sheather 2009, §2.1).
+
+## Xử lý các biến định tính
+
+### Xử lý các nhóm chức danh
+
+Xét tới biến nhóm định tính
+
+```{r encode-summary-before}
+cat("--- experience_level ---\n"); print(table(salary_df$experience_level))
+cat("\n--- employment_type ---\n"); print(table(salary_df$employment_type))
+cat("\n--- company_size ---\n");    print(table(salary_df$company_size))
+cat("\n--- remote_ratio ---\n");    print(table(salary_df$remote_ratio))
+cat("\n--- work_year ---\n");       print(table(salary_df$work_year))
+cat("\n--- job_title ---\n");       print(table(salary_df$job_title))
+cat("\n--- company_location ---\n");       print(table(salary_df$company_location))
+cat("\n--- employee_residence ---\n");       print(table(salary_df$employee_residence))
+
+
+```
+
+
+Xử lý gom nhóm các nhóm chức danh
+```{r}
+library(dplyr)
+library(stringr)
+
+salary_df <- salary_df %>%
+  mutate(
+    ## --------------------------
+    ## JOB_CATEGORY (chức năng công việc) — 5 nhóm, không tách riêng
+    ## Manager/Lead (nhóm quản lý được gộp theo từ khóa chức năng bên dưới,
+    ## ví dụ "Data Science Manager" -> Data Scientist).
+    ## Lưu ý quan trọng: nhãn ở vế phải case_when() PHẢI khớp chính xác với
+    ## danh sách `levels` dùng trong factor() ở bước encode-relevel bên dưới —
+    ## nếu lệch nhãn (vd "Machine Learning / AI" thay vì "ML Engineer"),
+    ## factor() sẽ âm thầm biến quan sát đó thành NA.
+    ## --------------------------
+    job_category = case_when(
+      # 1. Quét nhóm Machine Learning & AI trước (tránh trùng với Engineer/Scientist)
+      str_detect(job_title, regex("Machine Learning|ML|AI|Computer Vision|NLP", ignore_case = TRUE)) ~ "ML Engineer",
+
+      # 2. Quét nhóm Data Scientist
+      str_detect(job_title, regex("Scientist|Science|Research", ignore_case = TRUE)) ~ "Data Scientist",
+
+      # 3. Quét nhóm Data Analyst
+      str_detect(job_title, regex("Analyst|Analytics", ignore_case = TRUE)) ~ "Data Analyst",
+
+      # 4. Quét nhóm Data Engineer
+      str_detect(job_title, regex("Engineer|Architect|ETL|Developer", ignore_case = TRUE)) ~ "Data Engineer",
+
+      # 5. Các trường hợp còn lại (bao gồm Manager/Head/Director/Lead không
+      # trùng từ khóa chức năng nào ở trên, vd "Manager", "Head of Data")
+      TRUE ~ "Other"
+    ),
+
+    ## --------------------------
+    ## SENIORITY (chỉ để đối chiếu — xem đoạn diễn giải bên dưới)
+    ## --------------------------
+    seniority = case_when(
+      str_detect(job_title, "^Head") ~ "Head",
+      str_detect(job_title, "^Director") ~ "Director",
+      str_detect(job_title, "^Principal") ~ "Principal",
+      str_detect(job_title, "^Lead") ~ "Lead",
+      str_detect(job_title, "Manager") ~ "Manager",
+      TRUE ~ "Individual Contributor"
+    )
+  )
+
+salary_df$job_category <- factor(salary_df$job_category)
+salary_df$seniority    <- factor(salary_df$seniority)
+```
+
+
+```{r}
+table(salary_df$job_category)
+```
+
+```{r}
+p1 <- ggplot(salary_df, aes(x = job_category, y = salary_in_usd, fill = job_category)) +
+  geom_boxplot(alpha = 0.7, outlier.colour = "red", outlier.size = 2) +
+  scale_y_continuous(labels = scales::comma) + # Format số cho dễ nhìn
+  theme_minimal() +
+  labs(
+    title = "Phân phối Mức lương theo Nhóm nghề nghiệp (Boxplot)",
+    x = "Nhóm nghề nghiệp",
+    y = "Mức lương (USD)"
+  ) +
+  theme(legend.position = "none")
+
+print(p1)
+```
+```{r}
+p2 <- ggplot(salary_df, aes(x = salary_in_usd, fill = job_category)) +
+  geom_density(alpha = 0.6) +
+  facet_wrap(~job_category) + # Tách mỗi nhóm ra một khung hình riêng
+  scale_x_continuous(labels = scales::comma) +
+  theme_minimal() +
+  labs(
+    title = "Mật độ phân phối Mức lương theo Nhóm nghề (Density Plot)",
+    x = "Mức lương (USD)",
+    y = "Mật độ"
+  ) +
+  theme(legend.position = "none", axis.text.x = element_text(angle = 45, hjust = 1))
+
+print(p2)
+```
+
+Để khắc phục vấn đề phân tán dữ liệu (high cardinality) của biến `job_title`, báo cáo áp dụng phương pháp gom nhóm dựa trên tiêu chuẩn cấu trúc vai trò ngành dữ liệu hiện đại. Hơn 50 chức danh được quy chuẩn về 5 nhóm chức năng: **Data Analyst** (thiên về trực quan hóa), **Data Engineer** (thiên về hạ tầng), **Data Scientist** (thiên về nghiên cứu mô hình thống kê), **ML Engineer** (thiên về triển khai hệ thống AI/ML), và **Other** cho các chức danh còn lại — bao gồm cả các vị trí quản lý/lãnh đạo (Manager, Head, Director, Lead) không trùng từ khóa chức năng nào ở trên, nên không tách thành nhóm Manager/Lead riêng để tránh phân mảnh cỡ mẫu quá nhỏ. Việc gom nhóm này giúp cân bằng kích thước mẫu, đảm bảo độ tin cậy và sức mạnh thống kê cho các kiểm định ANOVA và Hồi quy ở các bước tiếp theo. Nhóm **Data Scientist** và **Data Engineer** chiếm tỷ trọng lớn nhất, phản ánh nhu cầu thị trường thực tế trong giai đoạn 2020–2022.
+
+```{r}
+table(salary_df$seniority)
+```
+
+```{r}
+# 1. Tạo bảng chéo (Cross-tabulation) đếm số lượng
+cross_tab <- table(salary_df$experience_level, salary_df$seniority)
+
+cat("Bảng đối chiếu số lượng giữa Experience Level và Seniority:\n")
+print(cross_tab)
+
+# 2. Tạo bảng chéo tính theo tỷ lệ % (Tùy chọn, giúp dễ nhìn xu hướng hơn)
+# margin = 2 nghĩa là tính tổng % theo từng cột Seniority
+prop_tab <- round(prop.table(cross_tab, margin = 2) * 100, 1)
+
+cat("\nBảng tỷ lệ phần trăm (%) phân bổ Experience Level trong từng Seniority:\n")
+print(prop_tab)
+
+# 3. Vẽ biểu đồ Bar Chart dạng Stacked để kiểm tra trực quan
+library(ggplot2)
+
+ggplot(salary_df, aes(x = seniority, fill = experience_level)) +
+  geom_bar(position = "fill") + # position = "fill" đưa về tỷ lệ 100%
+  theme_minimal() +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(
+    title = "Mối quan hệ giữa Seniority và Experience Level",
+    x = "Cấp bậc chức danh (Seniority)",
+    y = "Tỷ lệ (%)",
+    fill = "Kinh nghiệm\n(Exp Level)"
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+Biến phái sinh `seniority` (dùng riêng để đối chiếu ở trên) được quyết định loại bỏ khỏi không gian đặc trưng do có sự trùng lặp thông tin lớn với biến `experience_level` có sẵn. Dữ liệu chứng minh `experience_level` đã làm tốt nhiệm vụ phân loại các cấp độ quản lý và nhân viên một cách chi tiết hơn. Việc loại bỏ này là bước cần thiết để tối ưu hóa mô hình, ngăn chặn nguy cơ nhiễu loạn và đa cộng tuyến mà không làm giảm đi mức độ dự đoán. Lưu ý: tín hiệu "vị trí quản lý/lãnh đạo" cũng không được tách thành nhóm riêng trong `job_category` (xem mục trên) — các chức danh quản lý được gộp vào nhóm chức năng gần nhất hoặc vào "Other" — đây là một giới hạn của cách gom nhóm hiện tại, được ghi nhận lại ở phần hạn chế của mô hình.
+
+### Xử lý biến location
+
+Trước tiên kiểm tra mức độ trùng lặp giữa `company_location` và `employee_residence`:
+
+```{r location-overlap}
+overlap_rate <- mean(salary_df$company_location == salary_df$employee_residence)
+cat("Tỷ lệ trùng khớp company_location == employee_residence:",
+    round(overlap_rate * 100, 1), "%\n")
+```
+
+Tỷ lệ trùng khớp `r round(overlap_rate * 100, 1)`% xác nhận hai biến mang thông tin gần như trùng lặp hoàn toàn — đưa cả hai vào mô hình sẽ gây đa cộng tuyến nghiêm trọng. Nhóm áp dụng chiến lược hai bước:
+
+1. **Gom nhóm `company_location` → `company_region`**: trước tiên phân loại chi tiết theo chuẩn **M49 Geoscheme** của Liên Hợp Quốc (UNSD, 2023) để kiểm tra đầy đủ 50+ country code.
+2. **Tạo biến nhị phân `cross_border`** = 1 khi nhân viên sống khác quốc gia với công ty — thể hiện thông tin duy nhất của `employee_residence` mà không trùng lặp với `company_region`.
+
+```{r location-region-def}
+# Hàm gom nhóm chi tiết theo UN M49 Geoscheme — dùng để kiểm tra độ phủ
+# country code và làm cơ sở cho bước gộp 3 nhóm ở dưới.
+# Nguồn: United Nations Statistics Division (2023)
+# https://unstats.un.org/unsd/methodology/m49/
+region_m49 <- function(code) {
+  case_when(
+    # Northern America (M49: 021)
+    code %in% c("US", "CA")                               ~ "Northern_America",
+    # Latin America & Caribbean (M49: 419)
+    code %in% c("MX", "BR", "CO", "AR", "CL", "EC",
+                 "PE", "CR", "DO", "PR", "BO","HN")            ~ "Latin_America",
+    # Europe (M49: 150)
+    code %in% c("GB", "DE", "FR", "ES", "IT", "NL",
+                 "PT", "BE", "CH", "AT", "DK", "SE",
+                 "NO", "FI", "IE", "LU", "GR", "PL",
+                 "CZ", "HU", "RO", "UA", "RU", "TR",
+                 "SI", "BG", "HR", "RS", "SK", "MD",
+                 "MT", "EE", "LV", "LT", "AL")            ~ "Europe",
+    # Asia (M49: 142) — bao gồm Eastern, South-Eastern, Southern, Western Asia
+    code %in% c("IN", "CN", "JP", "SG", "HK", "KR",
+                 "PK", "MY", "TH", "VN", "PH", "IL",
+                 "AE", "SA", "BD", "LK", "ID", "TW",
+                 "IQ", "IR", "AM", "MM", "KZ")            ~ "Asia",
+    # Oceania (M49: 009)
+    code %in% c("AU", "NZ","AS")                               ~ "Oceania",
+    # Africa (M49: 002)
+    code %in% c("NG", "KE", "ZA", "GH", "ET",
+                 "TZ", "EG", "TN", "MA", "DZ")            ~ "Africa",
+    TRUE                                                    ~ "Other"
+  )
+}
+
+collapse_region_3 <- function(region_detail) {
+  case_when(
+    region_detail == "Northern_America" ~ "Northern_America",
+    region_detail == "Europe"           ~ "Europe",
+    TRUE                                 ~ "Rest_of_World"
+  )
+}
+
+salary_df <- salary_df |>
+  mutate(
+    company_region_detail = region_m49(company_location),      # 6 vùng M49 — chỉ dùng để kiểm tra độ phủ
+    company_region        = collapse_region_3(company_region_detail),  # 3 nhóm — dùng cho mô hình
+    cross_border           = as.integer(company_location != employee_residence)
+  )
+
+cat("Phân phối company_region_detail (M49, 6 vùng):\n")
+print(sort(table(salary_df$company_region_detail), decreasing = TRUE))
+```
+
+Từ dữ liệu trên cho thấy 4/6 vùng M49 có cỡ mẫu quá nhỏ, mất cân bằng nghiêm trọng khi phần lớn quan sát tập trung ở Bắc Mỹ và Châu Âu, trong khi các khu vực khác có kích thước mẫu quá nhỏ (n <= 8). Để tránh hiện tượng sai số chuẩn (standard error) bị phình to làm sai lệch kết quả kiểm định, báo cáo đã áp dụng chiến lược tái cấu trúc (re-binning). Các khu vực thiểu số được gom chung thành nhóm 'Phần còn lại của thế giới' (Rest of World). Phép biến đổi này giúp tạo ra 3 nhóm phân loại có kích thước mẫu đủ lớn, đảm bảo tính chặt chẽ và sức mạnh thống kê (statistical power) cho mô hình hồi quy và phân tích phương sai (ANOVA) ở các bước sau.
+
+```{r location-create-vars}
+cat("\nPhân phối company_region (3 nhóm dùng cho mô hình):\n")
+print(sort(table(salary_df$company_region), decreasing = TRUE))
+
+cat("\nTỷ lệ cross_border (làm việc xuyên quốc gia):",
+    round(mean(salary_df$cross_border) * 100, 1), "%\n")
+```
+Sau khi gộp, `company_region` còn 3 nhóm: **Northern_America** (346 quan sát), **Europe** (157 quan sát), và **Rest_of_World** — gộp từ Asia, Latin America, Oceania, Africa và Other (tổng khoảng 62 quan sát, mỗi vùng gốc chỉ 2–44 quan sát). `company_region_detail` (6 vùng M49) chỉ giữ lại để tra cứu/kiểm tra, không đưa vào tập dữ liệu mô hình.
+
+```{r location-drop-originals}
+# Loại bỏ 2 biến gốc và company_region_detail (chỉ dùng để tra cứu)
+# sau khi đã rút trích thông tin vào company_region (3 nhóm) và cross_border
+salary_df <- salary_df |>
+  select(-employee_residence, -company_location, -company_region_detail, -job_title)
+
+cat("Biến còn lại trong salary_df:", paste(names(salary_df), collapse = ", "), "\n")
+```
+
+`employee_residence` bị loại vì thông tin duy nhất của nó đã được nắm bắt qua `cross_border`. `company_location` được thay thế bằng `company_region` — phân loại chi tiết theo 6 vùng M49 (UNSD 2023) rồi gộp tiếp thành **3 nhóm** (Northern_America, Europe, Rest_of_World) do 4/6 vùng M49 gốc có cỡ mẫu quá nhỏ (2–44 quan sát) để ước lượng hệ số dummy đáng tin cậy. Job_title được gom nhóm thành job_category. Cách này giảm số lượng dummy từ 50+ xuống còn 2 + 1, đồng thời loại bỏ đa cộng tuyến giữa hai biến location.
+
+### Mã hoá biến phân loại
+
+```{r encode-summary-relevel}
+cat("--- experience_level ---\n"); print(table(salary_df$experience_level))
+cat("\n--- employment_type ---\n"); print(table(salary_df$employment_type))
+cat("\n--- company_size ---\n");    print(table(salary_df$company_size))
+cat("\n--- remote_ratio ---\n");    print(table(salary_df$remote_ratio))
+cat("\n--- work_year ---\n");       print(table(salary_df$work_year))
+```
+
+```{r encode-relevel}
+salary_df <- salary_df |>
+  mutate(
+    # Cấp độ kinh nghiệm: reference = EN (Entry-level, căn bản nhất)
+    experience_level = factor(experience_level,
+                               levels = c("EN", "MI", "SE", "EX"),
+                               labels = c("Entry", "Mid", "Senior", "Exec")),
+    # Loại hợp đồng: reference = FT (Full-time, chiếm ~96%)
+    employment_type  = factor(employment_type,
+                               levels = c("FT", "PT", "CT", "FL"),
+                               labels = c("FullTime", "PartTime", "Contract", "Freelance")),
+    # Quy mô công ty: reference = S (Small)
+    company_size     = factor(company_size,
+                               levels = c("S", "M", "L"),
+                               labels = c("Small", "Medium", "Large")),
+    # Remote ratio: 0 = onsite, 50 = hybrid, 100 = fully remote
+    remote_ratio     = factor(remote_ratio,
+                               levels = c(0, 50, 100),
+                               labels = c("Onsite", "Hybrid", "FullRemote")),
+    # work_year: giữ nguyên numeric để nắm bắt xu hướng thời gian tuyến tính
+    work_year        = as.integer(work_year),
+    # job_category: reference = Data Analyst (lương thấp nhất trong nhóm)
+    job_category     = factor(job_category,
+                               levels = c("Data Analyst", "Data Engineer",
+                                          "Data Scientist", "ML Engineer", "Other")),
+    # company_region: 3 nhóm gộp từ M49 Geoscheme (UNSD, 2023); reference = Northern_America
+    # (chiếm đa số quan sát, mức lương cao nhất — baseline tự nhiên)
+    company_region   = factor(company_region,
+                               levels = c("Northern_America", "Europe", "Rest_of_World"))
+    # cross_border: integer 0/1 — không cần factor
+  )
+
+# Tập dữ liệu cho mô hình: bỏ job_title gốc và seniority (biến chỉ dùng để
+# đối chiếu ở mục trên, đã quyết định loại vì trùng lặp với experience_level)
+# (employee_residence và company_location đã được xử lý ở mục location)
+salary_model <- salary_df |>
+  select(-seniority)
+
+cat("Biến trong tập dữ liệu mô hình:\n")
+str(salary_model)
+```
+
+```{r encode-rationale-table}
+data.frame(
+  Biến              = c("experience_level", "employment_type", "company_size",
+                        "remote_ratio", "work_year", "job_category",
+                        "company_region", "cross_border"),
+  Reference_level   = c("Entry (EN)", "FullTime (FT)", "Small (S)",
+                        "Onsite (0%)", "Numeric liên tục", "Data Analyst",
+                        "Northern_America", "Integer 0/1 (không cần)"),
+  Lý_do             = c(
+    "Nhóm mới vào nghề — lương căn bản nhất, điểm xuất phát tự nhiên",
+    "Hợp đồng toàn thời gian chiếm ~96% — nhóm đại diện",
+    "Công ty nhỏ — baseline tham chiếu hợp lý",
+    "Làm tại văn phòng — trạng thái truyền thống trước khi remote phổ biến",
+    "Giữ numeric để mô hình nắm bắt xu hướng tuyến tính theo thời gian",
+    "Vị trí phân tích dữ liệu cơ bản — lương thấp nhất trong ngành",
+    "Chiếm đa số quan sát (346/565); thị trường Bắc Mỹ là mức lương cao nhất — baseline tự nhiên (UNSD M49: 021)",
+    "Biến nhị phân; 0 = cùng quốc gia, 1 = xuyên biên giới"
+  ),
+  row.names = NULL
+) |>
+  kbl(caption = "Lựa chọn reference level cho từng biến phân loại") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), font_size = 12)
+```
+
+Việc chọn reference level ảnh hưởng trực tiếp đến diễn giải hệ số — mỗi hệ số phản ánh *chênh lệch so với reference*, không phải mức tuyệt đối. **Entry-level** được chọn làm reference cho `experience_level` vì đây là điểm xuất phát tự nhiên trong lộ trình sự nghiệp; hệ số của Senior và Exec sẽ cho biết mức chênh lương so với nhân viên mới vào nghề. Tương tự, **Data Analyst** làm reference cho `job_category` vì đây là vị trí phổ biến với lương cơ bản thấp nhất — các hệ số còn lại phản ánh premium so với vị trí này. `cross_border` là biến nhị phân (0 = làm việc cùng quốc gia với công ty, 1 = xuyên biên giới), không cần factor.`company_region` chọn factore là **Northern_America** do giá trị này chiếm đa số quan sát.
+
+## Phát hiện và xử lý Outlier
+
+```{r outlier-before}
+ggplot(salary_model, aes(y = salary_in_usd)) +
+  geom_boxplot(fill = "steelblue", alpha = 0.6,
+               outlier.color = "red", outlier.size = 1.5) +
+  scale_y_continuous(labels = label_comma(prefix = "$")) +
+  labs(
+    title    = "Phân phối salary_in_usd — Trước winsorize",
+    subtitle = "Điểm đỏ: outlier ngoài khoảng [Q1 − 1.5·IQR, Q3 + 1.5·IQR]",
+    y        = "salary_in_usd (USD)", x = NULL
+  ) +
+  coord_flip()
+```
+
+### Nhận diện outlier theo quy tắc IQR
+
+Boxplot ở trên đánh dấu outlier (điểm đỏ) theo quy tắc chuẩn `[Q1 − 1.5·IQR, Q3 + 1.5·IQR]`. Trước khi quyết định cách xử lý, cần xem xét thử các outlier này có đặc trưng gì, có giải thích được về mặt nghiệp vụ hay là dấu hiệu lỗi nhập liệu.
+
+```{r outlier-identify}
+q1_out      <- quantile(salary_model$salary_in_usd, 0.25)
+q3_out      <- quantile(salary_model$salary_in_usd, 0.75)
+iqr_out     <- q3_out - q1_out
+lower_fence <- q1_out - 1.5 * iqr_out
+upper_fence <- q3_out + 1.5 * iqr_out
+
+outliers_df <- salary_model |>
+  mutate(Huong = ifelse(salary_in_usd > upper_fence, "Trên ngưỡng trên",
+                  ifelse(salary_in_usd < lower_fence, "Dưới ngưỡng dưới", NA))) |>
+  filter(!is.na(Huong)) |>
+  arrange(desc(salary_in_usd))
+
+cat(sprintf("Ngưỡng IQR: [%s ; %s] USD\n",
+            format(round(lower_fence), big.mark = ","),
+            format(round(upper_fence), big.mark = ",")))
+cat(sprintf("Outlier trên ngưỡng trên : %d quan sát\n", sum(salary_model$salary_in_usd > upper_fence)))
+cat(sprintf("Outlier dưới ngưỡng dưới: %d quan sát\n", sum(salary_model$salary_in_usd < lower_fence)))
+cat(sprintf("Tổng: %d quan sát (%.1f%% dữ liệu)\n",
+            nrow(outliers_df), nrow(outliers_df) / nrow(salary_model) * 100))
+```
+
+```{r outlier-profile-table}
+outliers_df |>
+  select(Huong, salary_in_usd, experience_level, job_category, company_size,
+         company_region, remote_ratio, work_year) |>
+  head(15) |>
+  mutate(salary_in_usd = fmt(salary_in_usd)) |>
+  kbl(caption = paste0("Hồ sơ các quan sát outlier cực đoan nhất theo IQR (hiển thị tối đa 15/",
+                        nrow(outliers_df), ")"),
+      col.names = c("Hướng", "Lương (USD)", "Kinh nghiệm", "Nhóm chức danh",
+                    "Quy mô CT", "Khu vực", "Remote", "Năm")) |>
+  kable_styling(bootstrap_options = c("striped", "hover"), font_size = 12) |>
+  scroll_box(width = "100%")
+```
+
+Qua quan sát ta thấy điểm chung lớn nhất và dễ thấy nhất là cả 10/10 cá nhân có mức lương cao nhất tập dữ liệu đều làm việc tại Bắc Mỹ (Northern_America). Tuy nhiên ta thấy có 3 quan trắc dù ở mức kinh nghiệm "Middle" nhưng lại có mức lương đến nửa triệu đô 1 năm, nên ta đi sâu vào nhóm "Middle" để quan sát thêm.
+
+
+```{r outlier-composition}
+# Dùng trực tiếp toàn bộ tập dữ liệu salary_model
+ggplot(salary_model, aes(x = salary_in_usd)) +
+  # Vẽ histogram (binwidth = 10,000 USD)
+  geom_histogram(fill = "steelblue", color = "white", binwidth = 10000, alpha = 0.8) +
+  
+  # TUYỆT CHIÊU: Tách biểu đồ theo từng level
+  # scales = "free_y" giúp trục Y của mỗi biểu đồ tự động co giãn theo số lượng nhân sự của nhóm đó
+  facet_wrap(~ experience_level, ncol = 2, scales = "free_y") +
+  
+  # Chia vạch trục X chi tiết (mở rộng lên 600k vì có người lương 600k ở nhóm Exec)
+  scale_x_continuous(labels = comma, breaks = seq(0, 600000, by = 100000)) +
+  theme_minimal() +
+  labs(
+    title = "Phân phối chi tiết Mức lương theo Cấp bậc Kinh nghiệm",
+    subtitle = "Kiểm tra sự đứt gãy và các điểm Outlier cực đoan (> 400k USD) trên toàn hệ thống",
+    x = "Mức lương (USD)",
+    y = "Số lượng quan sát"
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, face = "bold"),
+    plot.title = element_text(face = "bold", size = 14),
+    # Làm nổi bật tên của từng nhóm cấp bậc (Entry, Mid, Senior, Exec) trên mỗi biểu đồ nhỏ
+    strip.text = element_text(face = "bold", size = 12, color = "darkblue",
+                              margin = margin(b = 10, t = 10)) 
+  ) +
+  
+  # Vẽ đường ranh giới cảnh báo màu đỏ tại ngưỡng 400k áp dụng cho tất cả các khung hình
+  geom_vline(xintercept = 400000, color = "red", linetype = "dashed", linewidth = 1)
+```
+
+
+```{r outlier-explain-stats}
+# Số liệu dùng trực tiếp trong đoạn diễn giải bên dưới — tính động để luôn
+# khớp với dữ liệu thực khi knit lại
+pct_senior_exec_out  <- round(mean(outliers_df$experience_level %in% c("Senior", "Exec")) * 100, 1)
+pct_senior_exec_all  <- round(mean(salary_model$experience_level %in% c("Senior", "Exec")) * 100, 1)
+pct_large_out        <- round(mean(outliers_df$company_size == "Large") * 100, 1)
+pct_large_all        <- round(mean(salary_model$company_size == "Large") * 100, 1)
+pct_us_out           <- round(mean(outliers_df$company_region == "Northern_America") * 100, 1)
+pct_us_all           <- round(mean(salary_model$company_region == "Northern_America") * 100, 1)
+n_lower_out          <- sum(salary_model$salary_in_usd < lower_fence)
+```
+
+Bảng so sánh cơ cấu cho thấy nhóm outlier (theo IQR) **không phân bố ngẫu nhiên** mà tập trung có hệ thống vào các đặc điểm cụ thể: `r pct_senior_exec_out`% outlier ở cấp **Senior/Exec**, so với `r pct_senior_exec_all`% trong toàn bộ dữ liệu; `r pct_large_out`% outlier thuộc công ty **Large**, so với `r pct_large_all`% toàn bộ; `r pct_us_out`% outlier ở khu vực **Northern_America**, so với `r pct_us_all`% toàn bộ. Nói cách khác, các mức lương cực cao chủ yếu đến từ chuyên gia cấp cao tại công ty lớn ở Bắc Mỹ — một tổ hợp đặc điểm hoàn toàn hợp lý về mặt thị trường lao động, không phải dấu hiệu lỗi nhập liệu. Kết hợp với việc bước kiểm tra tỷ giá quy đổi ở mục "Loại bỏ biến dư thừa" đã xác nhận `salary_in_usd` được tính nhất quán (sai số làm tròn không đáng kể), nhóm kết luận đây là các quan sát **hợp lệ nhưng cực đoan (genuine extreme values)**, không phải lỗi cần loại bỏ. `r n_lower_out` quan sát nằm dưới ngưỡng dưới — số lượng rất nhỏ hoặc bằng 0, không đủ để phân tích cơ cấu riêng, và mức lương thấp trong ngành Data Science (vd vị trí Entry/Freelance) vẫn là giá trị hợp lý về mặt nghiệp vụ.
+
+### Xem xét riêng 3 quan sát Mid-level có lương bất thường
+
+Trước khi chọn ngưỡng xử lý cuối cùng, cần làm rõ 3 quan sát "Mid-level nhưng lương nửa triệu đô" phát hiện ở histogram trên — đây là trường hợp đặc biệt vì chúng phá vỡ chính "câu chuyện" đã dùng để biện minh cho outlier (Senior/Exec ở công ty lớn), nên cần quyết định có xử lý khác biệt hay không.
+
+```{r outlier-mid-investigate}
+mid_extreme <- salary_model |>
+  filter(experience_level == "Mid", salary_in_usd > 400000) |>
+  arrange(desc(salary_in_usd))
+
+q99_check       <- quantile(salary_model$salary_in_usd, 0.99)
+n_mid_above_q99 <- sum(mid_extreme$salary_in_usd > q99_check)
+
+mid_extreme |>
+  select(salary_in_usd, job_category, employment_type, company_size,
+         company_region, remote_ratio, work_year, cross_border) |>
+  mutate(salary_in_usd = fmt(salary_in_usd)) |>
+  kbl(caption = paste0("Hồ sơ đầy đủ của ", nrow(mid_extreme),
+                        " quan sát Mid-level có salary_in_usd > $400,000")) |>
+  kable_styling(bootstrap_options = c("striped", "hover"), font_size = 12)
+```
+
+Xét riêng `r nrow(mid_extreme)` quan sát này: nhóm chức danh gồm `r paste(unique(as.character(mid_extreme$job_category)), collapse = ", ")`; quy mô công ty gồm `r paste(unique(as.character(mid_extreme$company_size)), collapse = ", ")`; khu vực gồm `r paste(unique(as.character(mid_extreme$company_region)), collapse = ", ")`. Quan trọng hơn: `r n_mid_above_q99`/`r nrow(mid_extreme)` quan sát này đã nằm trên ngưỡng phân vị 99% (`r format(round(q99_check), big.mark = ",")` USD) — nghĩa là quy tắc winsorize chặn trên ở mục dưới sẽ **tự động** kéo các giá trị này về ngưỡng biên mà không cần một luật xử lý riêng.
+
+Nhóm quyết định **không tạo ngoại lệ xử lý riêng** cho 3 quan sát này (ví dụ xóa hẳn hoặc gán lại `experience_level`), vì hai lý do: (1) việc "sửa" từng quan sát cụ thể dựa trên cảm quan sẽ đưa yếu tố chủ quan vào một bước lẽ ra cần khách quan, có nguy cơ thiên lệch kết quả theo hướng nhóm mong muốn (data snooping); (2) quy tắc winsorize chặn trên áp dụng đồng nhất cho toàn bộ dữ liệu đã xử lý các quan sát này nhất quán với mọi outlier khác, không cần ngoại lệ. Tổ hợp "Mid-level nhưng lương ngang Senior/Exec" vẫn là một điểm bất thường đáng ghi nhận — có thể phản ánh sai lệch khi gán nhãn `experience_level` gốc, hoặc cá nhân có kỹ năng hiếm (vd chuyên sâu ML) được trả lương vượt khung cấp bậc — nên được liệt kê như một **hạn chế của dữ liệu** ở phần kết luận, thay vì được "sửa" chủ quan trong bước tiền xử lý.
+
+### Xử lý outlier: winsorize một chiều ở chặn trên (phân vị 99%)
+
+Quy tắc IQR dùng để **phát hiện và mô tả** outlier (chuẩn trực quan của boxplot) chỉ tìm thấy bằng chứng bất thường ở **chặn trên** — không có quan sát nào vượt ngưỡng dưới. Vì vậy, khác với phiên bản trước đó (winsorize hai chiều 1%–99%), nhóm quyết định winsorize **một chiều**, chỉ cắt tại phân vị 99% và **giữ nguyên chặn dưới**:
+
+```{r outlier-stats}
+q01 <- quantile(salary_model$salary_in_usd, 0.01)   # chỉ để tham khảo, KHÔNG áp dụng
+q99 <- quantile(salary_model$salary_in_usd, 0.99)
+n_below <- sum(salary_model$salary_in_usd < q01)     # tham khảo — không bị winsorize
+n_above <- sum(salary_model$salary_in_usd > q99)
+
+cat(sprintf("Phân vị 1%% (tham khảo, KHÔNG áp dụng): %s USD  (%d quan sát — không xử lý)\n",
+            format(round(q01), big.mark = ","), n_below))
+cat(sprintf("Phân vị 99%% (áp dụng winsorize): %s USD  (%d quan sát bị kéo về ngưỡng này)\n",
+            format(round(q99), big.mark = ","), n_above))
+```
+
+Lý do chọn một chiều thay vì hai chiều: winsorize theo phân vị là ngưỡng **cố định theo tỷ lệ** — theo đúng định nghĩa toán học, luôn có đúng khoảng 1% quan sát nằm dưới phân vị thứ nhất, bất kể có bằng chứng bất thường ở đó hay không. Áp dụng nó cho chặn dưới (như bản trước) đồng nghĩa "xử lý" `r n_below` quan sát mà không có bất kỳ bằng chứng nào (từ IQR, từ Cook's Distance, hay từ phân tích cơ cấu ở trên) cho thấy chúng là outlier — chỉ đơn thuần vì chúng nằm trong 1% thấp nhất mẫu. Ngược lại, chặn trên có bằng chứng hội tụ từ ba nguồn: quy tắc IQR (10 quan sát), phân tích cơ cấu (tập trung ở Senior/Exec, Large, Northern_America), và Cook's Distance (ảnh hưởng đòn bẩy lên mô hình hồi quy nháp). Winsorize một chiều vì vậy nhất quán hơn với chính bằng chứng đã trình bày — tránh xử lý những quan sát không có lý do rõ ràng để bị coi là bất thường, đúng theo tinh thần *"không xử lý nếu không có bằng chứng"* đã đặt ra ở đầu mục này.
+
+```{r outlier-apply}
+salary_model <- salary_model |>
+  mutate(salary_in_usd = winsorize(salary_in_usd, low = 0, high = 0.99))
+
+cat(sprintf("Sau winsorize — Min: %s | Max: %s | Mean: %s USD\n",
+            format(round(min(salary_model$salary_in_usd)),  big.mark = ","),
+            format(round(max(salary_model$salary_in_usd)),  big.mark = ","),
+            format(round(mean(salary_model$salary_in_usd)), big.mark = ",")))
+```
+
+```{r outlier-after}
+ggplot(salary_model, aes(y = salary_in_usd)) +
+  geom_boxplot(fill = "seagreen", alpha = 0.6,
+               outlier.color = "red", outlier.size = 1.5) +
+  scale_y_continuous(labels = label_comma(prefix = "$")) +
+  labs(
+    title    = "Phân phối salary_in_usd — Sau winsorize một chiều (phân vị 99%)",
+    subtitle = "Chặn dưới giữ nguyên; chỉ giá trị cực đoan ở chặn trên được kéo về ngưỡng biên",
+    y        = "salary_in_usd (USD)", x = NULL
+  ) +
+  coord_flip()
+```
+
+Như đã chứng minh bằng số liệu ở mục trên, các outlier trên ngưỡng trên **có căn cứ nghiệp vụ rõ ràng** (Senior/Exec, công ty Large, tập trung ở Northern_America) chứ không phải lỗi nhập liệu — nên xóa bỏ là không phù hợp vì sẽ làm mất thông tin thật và làm mẫu thiên lệch (loại bỏ đúng nhóm nhân sự cấp cao mà mô hình cần học). Thay vào đó, chiến lược **winsorize một chiều tại phân vị 99%** kéo giá trị cực đoan về ngưỡng biên mà vẫn giữ nguyên toàn bộ 607 quan sát (Sheather 2009, §3.2.3; Bingham & Fry 2010, §7.1) — đây là một thỏa hiệp: vẫn giữ được tín hiệu "lương cao hơn hẳn" của nhóm này, nhưng giới hạn ảnh hưởng đòn bẩy (leverage) quá mức của vài quan sát cực trị lên hệ số hồi quy OLS, đồng thời không động vào chặn dưới vì không có bằng chứng bất thường ở đó. Tổng cộng `r n_above` quan sát được điều chỉnh (so với `r n_below + n_above` nếu vẫn winsorize hai chiều như trước); miền giá trị thu hẹp còn tối đa [`r format(round(min(salary_model$salary_in_usd)), big.mark=",")` – `r format(round(max(salary_model$salary_in_usd)), big.mark=",")`] USD.
+
+## Tổng kết tiền xử lý
+
+```{r preprocess-final-dim}
+cat("Kích thước tập dữ liệu mô hình cuối cùng:",
+    nrow(salary_model), "quan sát ×", ncol(salary_model), "biến\n")
+cat("Biến:", paste(names(salary_model), collapse = ", "), "\n")
+```
+
+```{r preprocess-summary-table}
+data.frame(
+  Bước        = c(
+    "1. Bỏ salary & salary_currency",
+    "2. Gộp job_title → job_category",
+    "3. company_location → company_region (M49 → gộp 3 nhóm); tạo cross_border; bỏ employee_residence",
+    "4. Chuyển categorical → factor (relevel)",
+    "5. Winsorize salary_in_usd — một chiều, chặn trên [phân vị 99%]"
+  ),
+  Lý_do       = c(
+    "Collinear với target; ~17 dummy tiền tệ không cần thiết",
+    "50+ chức danh → 5 nhóm chức năng, tránh overfitting",
+    "Giảm 50+ dummy xuống 2+1; 6 vùng M49 gộp thành 3 vì 4 vùng gốc có <50 quan sát; cross_border giữ thông tin duy nhất của employee_residence; trùng lặp >90%",
+    "R cần factor để tạo dummy; reference level xác định rõ diễn giải",
+    "IQR chỉ phát hiện outlier ở chặn trên (không có bằng chứng ở chặn dưới) — winsorize một chiều nhất quán với bằng chứng; giữ 607 quan sát, giảm ảnh hưởng điểm cực đoan lên hệ số OLS"
+  ),
+  Tham_khảo   = c(
+    "Sheather (2009) §2.1",
+    "James et al. (2023) §3.3.2",
+    "UNSD (2023) M49 Geoscheme; James et al. (2023) §3.3.2",
+    "James et al. (2023) §3.3.1",
+    "Sheather (2009) §3.2.3; Bingham & Fry (2010) §7.1"
+  ),
+  row.names   = NULL
+) |>
+  kbl(caption = "Tổng hợp các bước tiền xử lý và lý do thực hiện") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), font_size = 12) |>
+  column_spec(1, bold = TRUE)
+```
+
+Sau tiền xử lý, tập dữ liệu mô hình còn `r nrow(salary_model)` quan sát và `r ncol(salary_model)` biến: 1 biến mục tiêu (`salary_in_usd`), 1 biến số liên tục (`work_year`), và `r ncol(salary_model) - 2` biến phân loại đã được mã hóa factor.
+
+------------------------------------------------------------------------
+
+# PHẦN B: PHÂN TÍCH KHÁM PHÁ DỮ LIỆU (EDA)
+
+## Thống kê mô tả biến mục tiêu
+
+```{r desc-stats}
+sal <- salary_model$salary_in_usd
+
+# fmt() đã được định nghĩa từ chunk "packages" ở đầu file (không định nghĩa
+# lại ở đây) vì các chunk ở Phần A (mục Outlier) cần dùng nó trước khi tới
+# Phần B này.
+
+data.frame(
+  Chỉ_số  = c("Số quan sát (n)", "Trung bình", "Trung vị",
+               "Độ lệch chuẩn", "Giá trị nhỏ nhất", "Q1 (25%)",
+               "Q3 (75%)", "Giá trị lớn nhất", "IQR",
+               "Hệ số biến thiên (CV%)"),
+  Giá_trị = c(
+    length(sal),
+    fmt(mean(sal)),
+    fmt(median(sal)),
+    fmt(sd(sal)),
+    fmt(min(sal)),
+    fmt(quantile(sal, 0.25)),
+    fmt(quantile(sal, 0.75)),
+    fmt(max(sal)),
+    fmt(IQR(sal)),
+    paste0(round(sd(sal) / mean(sal) * 100, 1), "%")
+  ),
+  row.names = NULL
+) |>
+  kbl(caption = "Thống kê mô tả biến mục tiêu salary_in_usd (sau winsorize)") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), font_size = 12) |>
+  column_spec(1, bold = TRUE)
+```
+
+Trung bình lương là **`r fmt(mean(sal))`/năm**, nhưng trung vị thấp hơn đáng kể ở mức **`r fmt(median(sal))`** — khoảng cách `r fmt(mean(sal) - median(sal))` này là dấu hiệu rõ ràng của phân phối lệch phải. Hệ số biến thiên **CV = `r round(sd(sal)/mean(sal)*100, 1)`%** cho thấy mức độ phân tán rất cao: lương trong ngành Data Science dao động mạnh tùy theo kinh nghiệm, vị trí và địa lý — không phải một thị trường đồng nhất.
+
+## Phân phối biến mục tiêu
+
+```{r dist-histogram}
+ggplot(salary_model, aes(x = salary_in_usd)) +
+  geom_histogram(bins = 40, fill = "steelblue", color = "white", alpha = 0.85) +
+  geom_vline(aes(xintercept = mean(salary_in_usd), linetype = "Trung bình"),
+             color = "red", linewidth = 0.9) +
+  geom_vline(aes(xintercept = median(salary_in_usd), linetype = "Trung vị"),
+             color = "darkorange", linewidth = 0.9) +
+  scale_x_continuous(labels = label_comma(prefix = "$")) +
+  scale_linetype_manual(
+    name   = "",
+    values = c("Trung bình" = "dashed", "Trung vị" = "solid")
+  ) +
+  labs(
+    title    = "Phân phối salary_in_usd",
+    subtitle = paste0("Trung bình ", fmt(mean(sal)),
+                      " > Trung vị ", fmt(median(sal)),
+                      " — phân phối lệch phải rõ rệt"),
+    x = "Lương (USD)", y = "Số quan sát"
+  )
+```
+
+```{r dist-log}
+ggplot(salary_model, aes(x = log(salary_in_usd))) +
+  geom_histogram(bins = 40, fill = "mediumpurple", color = "white", alpha = 0.85) +
+  labs(
+    title    = "Phân phối log(salary_in_usd)",
+    subtitle = "Biến đổi log cho phân phối đối xứng hơn — sẽ cân nhắc trong mô hình",
+    x        = "log(salary_in_usd)", y = "Số quan sát"
+  )
+```
+
+Histogram xác nhận phân phối `salary_in_usd` lệch phải: đuôi phải kéo dài do một nhóm nhỏ chuyên gia cấp cao nhận mức lương rất cao. Khi biến đổi log, phân phối trở nên đối xứng hơn rõ rệt — gợi ý quan trọng cho bước xây dựng mô hình, vì OLS với Y gốc có thể vi phạm giả định phân phối chuẩn phần dư, và phiên bản log(Y) thường cải thiện giả định BLUE trong bài toán lương (Sheather 2009, §3.4).
+
+## Lương theo cấp độ kinh nghiệm
+
+```{r eda-experience-box}
+ggplot(salary_model,
+       aes(x = experience_level, y = salary_in_usd, fill = experience_level)) +
+  geom_boxplot(alpha = 0.75, outlier.alpha = 0.4) +
+  scale_y_continuous(labels = label_comma(prefix = "$")) +
+  scale_fill_brewer(palette = "Blues") +
+  labs(
+    title    = "Phân phối lương theo cấp độ kinh nghiệm",
+    subtitle = "Mức lương tăng rõ rệt từ Entry đến Executive",
+    x = "Cấp độ kinh nghiệm", y = "Lương (USD)", fill = NULL
+  ) +
+  theme(legend.position = "none")
+```
+
+```{r eda-experience-table}
+exp_stats <- salary_model |>
+  group_by(experience_level) |>
+  summarise(
+    n      = n(),
+    Mean   = fmt(mean(salary_in_usd)),
+    Median = fmt(median(salary_in_usd)),
+    SD     = fmt(sd(salary_in_usd)),
+    Min    = fmt(min(salary_in_usd)),
+    Max    = fmt(max(salary_in_usd)),
+    .groups = "drop"
+  )
+
+exp_stats |>
+  kbl(caption = "Thống kê lương theo cấp độ kinh nghiệm",
+      col.names = c("Cấp độ", "n", "Trung bình", "Trung vị",
+                    "Độ lệch chuẩn", "Min", "Max")) |>
+  kable_styling(bootstrap_options = c("striped", "hover"), font_size = 12)
+```
+
+Mức chênh lương giữa các nhóm kinh nghiệm rất rõ ràng. Nhóm **Executive** có trung bình cao nhất, trong khi **Entry-level** khởi đầu thấp hơn đáng kể — khoảng cách này phản ánh giá trị thị trường của kinh nghiệm tích lũy trong lĩnh vực dữ liệu. Đáng chú ý là độ phân tán (SD) cũng tăng theo cấp độ: lương Executive dao động rộng hơn nhiều so với Entry, cho thấy nhóm cấp cao hưởng lợi khác biệt nhiều hơn từ ngành nghề, công ty cụ thể, và địa lý.
+
+## Lương theo nhóm chức danh
+
+```{r eda-jobcat-box}
+ggplot(salary_model,
+       aes(x  = reorder(job_category, salary_in_usd, median),
+           y  = salary_in_usd,
+           fill = job_category)) +
+  geom_boxplot(alpha = 0.75, outlier.alpha = 0.4) +
+  scale_y_continuous(labels = label_comma(prefix = "$")) +
+  scale_fill_brewer(palette = "Set2") +
+  coord_flip() +
+  labs(
+    title    = "Phân phối lương theo nhóm chức danh",
+    subtitle = "Sắp xếp theo trung vị từ thấp đến cao",
+    x = NULL, y = "Lương (USD)", fill = NULL
+  ) +
+  theme(legend.position = "none")
+```
+
+```{r eda-jobcat-table}
+job_stats <- salary_model |>
+  group_by(job_category) |>
+  summarise(
+    n           = n(),
+    Median_num  = median(salary_in_usd),   # giữ giá trị số để sắp xếp đúng
+    Mean        = fmt(mean(salary_in_usd)),
+    Median      = fmt(median(salary_in_usd)),
+    SD          = fmt(sd(salary_in_usd)),
+    .groups = "drop"
+  ) |>
+  arrange(desc(Median_num)) |>
+  select(-Median_num)
+
+job_stats |>
+  kbl(caption = "Thống kê lương theo nhóm chức danh",
+      col.names = c("Nhóm", "n", "Trung bình", "Trung vị", "Độ lệch chuẩn")) |>
+  kable_styling(bootstrap_options = c("striped", "hover"), font_size = 12)
+```
+
+Nhóm **`r job_stats$job_category[1]`** dẫn đầu về trung vị lương (`r job_stats$Median[1]`), phản ánh nhu cầu cao và khan hiếm nhân lực có chuyên môn sâu. Ở đầu kia của bảng xếp hạng, nhóm **`r job_stats$job_category[nrow(job_stats)]`** có trung vị thấp nhất (`r job_stats$Median[nrow(job_stats)]`) — nếu đây là Data Analyst thì nhất quán với việc vai trò này được chọn làm reference level trong mô hình. Lưu ý nhóm "Other" (bao gồm cả các chức danh quản lý/lãnh đạo không tách riêng — xem mục gom nhóm ở Phần A) là một nhóm hỗn hợp, nên trung vị của nhóm này cần diễn giải thận trọng hơn các nhóm chức năng thuần túy.
+
+## Xu hướng lương theo năm
+
+```{r eda-year-trend}
+year_stats <- salary_model |>
+  group_by(work_year) |>
+  summarise(
+    n      = n(),
+    Mean   = mean(salary_in_usd),
+    Median = median(salary_in_usd),
+    SD     = sd(salary_in_usd),
+    .groups = "drop"
+  )
+
+ggplot(year_stats, aes(x = work_year)) +
+  geom_ribbon(aes(ymin = Mean - SD, ymax = Mean + SD),
+              fill = "steelblue", alpha = 0.15) +
+  geom_line(aes(y = Mean,   color = "Trung bình"), linewidth = 1) +
+  geom_line(aes(y = Median, color = "Trung vị"),   linewidth = 1, linetype = "dashed") +
+  geom_point(aes(y = Mean,   color = "Trung bình"), size = 3) +
+  geom_point(aes(y = Median, color = "Trung vị"),   size = 3) +
+  geom_label(aes(y = Mean, label = paste0("n=", n)),
+             nudge_y = 2500, size = 3.2, color = "grey40") +
+  scale_y_continuous(labels = label_comma(prefix = "$")) +
+  scale_x_continuous(breaks = unique(year_stats$work_year)) +
+  scale_color_manual(values = c("Trung bình" = "steelblue", "Trung vị" = "darkorange")) +
+  labs(
+    title    = "Xu hướng lương trung bình theo năm",
+    subtitle = "Dải xanh: ±1 độ lệch chuẩn quanh trung bình",
+    x = "Năm", y = "Lương (USD)", color = NULL
+  )
+```
+
+```{r eda-year-table}
+year_stats |>
+  mutate(
+    Mean   = fmt(Mean),
+    Median = fmt(Median),
+    SD     = fmt(SD)
+  ) |>
+  kbl(caption = "Thống kê lương theo năm",
+      col.names = c("Năm", "n", "Trung bình", "Trung vị", "Độ lệch chuẩn")) |>
+  kable_styling(bootstrap_options = c("striped", "hover"), font_size = 12)
+```
+
+Xu hướng tăng lương trong ngành Data Science từ 2020 đến 2022 hiện rõ qua cả trung bình lẫn trung vị. Đây không phải ngẫu nhiên — giai đoạn này trùng với làn sóng chuyển đổi số hậu COVID-19, nhu cầu phân tích dữ liệu bùng nổ đồng thời với sự cạnh tranh thu hút nhân tài từ các công ty công nghệ lớn. Cỡ mẫu tăng từ `r year_stats$n[1]` (2020) lên `r year_stats$n[nrow(year_stats)]` (2022) phản ánh cả sự phát triển thị trường lẫn lượng dữ liệu được thu thập nhiều hơn qua các năm. Dải ±1 SD nới rộng theo thời gian, cho thấy sự phân tầng lương ngày càng gia tăng khi thị trường trưởng thành.
+
+## Lương theo chế độ làm việc và quy mô công ty
+
+```{r eda-remote-size, fig.height=4.5}
+p_remote <- ggplot(salary_model,
+       aes(x = remote_ratio, y = salary_in_usd, fill = remote_ratio)) +
+  geom_boxplot(alpha = 0.75, outlier.alpha = 0.4) +
+  scale_y_continuous(labels = label_comma(prefix = "$")) +
+  scale_fill_brewer(palette = "Oranges") +
+  labs(title = "Lương theo chế độ làm việc",
+       x = NULL, y = "Lương (USD)", fill = NULL) +
+  theme(legend.position = "none")
+
+p_size <- ggplot(salary_model,
+       aes(x = company_size, y = salary_in_usd, fill = company_size)) +
+  geom_boxplot(alpha = 0.75, outlier.alpha = 0.4) +
+  scale_y_continuous(labels = label_comma(prefix = "$")) +
+  scale_fill_manual(values = c("Small"  = "#74c476",
+                                "Medium" = "#31a354",
+                                "Large"  = "#006d2c")) +
+  labs(title = "Lương theo quy mô công ty",
+       x = NULL, y = NULL, fill = NULL) +
+  theme(legend.position = "none")
+
+grid.arrange(p_remote, p_size, ncol = 2)
+```
+
+```{r eda-remote-size-table}
+bind_rows(
+  salary_model |>
+    group_by(Nhóm = as.character(remote_ratio)) |>
+    summarise(Biến = "remote_ratio", n = n(),
+              Mean = fmt(mean(salary_in_usd)),
+              Median = fmt(median(salary_in_usd)), .groups = "drop"),
+  salary_model |>
+    group_by(Nhóm = as.character(company_size)) |>
+    summarise(Biến = "company_size", n = n(),
+              Mean = fmt(mean(salary_in_usd)),
+              Median = fmt(median(salary_in_usd)), .groups = "drop")
+) |>
+  select(Biến, Nhóm, n, Mean, Median) |>
+  kbl(caption = "Thống kê lương theo chế độ làm việc và quy mô công ty") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), font_size = 12)
+```
+
+Mối quan hệ giữa `remote_ratio` và lương không đơn thuần là "càng remote càng lương cao" — phân phối giữa ba nhóm khá tương đồng về trung vị. Remote cao thường đi kèm với công ty có thể tuyển nhân tài toàn cầu (nâng lương), nhưng đồng thời cũng có thể đặt trụ sở ở vùng chi phí thấp (kéo lương xuống) — hai lực này triệt tiêu nhau trong dữ liệu tổng hợp. Về `company_size`, công ty **Medium** và **Large** trả lương nhỉnh hơn **Small**, nhất quán với thực tế rằng công ty lớn cạnh tranh nhân tài bằng mức lương cao hơn.
+
+## Lương theo khu vực công ty (company_region)
+
+```{r eda-region-box, fig.height=4.5}
+p_region_box <- ggplot(salary_model,
+       aes(x = reorder(company_region, salary_in_usd, median),
+           y = salary_in_usd, fill = company_region)) +
+  geom_boxplot(alpha = 0.75, outlier.alpha = 0.4) +
+  scale_y_continuous(labels = label_comma(prefix = "$")) +
+  scale_fill_brewer(palette = "Purples") +
+  labs(title = "Phân phối lương theo khu vực công ty",
+       subtitle = "Sắp xếp theo trung vị",
+       x = NULL, y = "Lương (USD)", fill = NULL) +
+  theme(legend.position = "none")
+
+p_region_density <- ggplot(salary_model, aes(x = salary_in_usd, fill = company_region)) +
+  geom_density(alpha = 0.6) +
+  facet_wrap(~company_region, ncol = 1) +
+  scale_x_continuous(labels = label_comma(prefix = "$")) +
+  scale_fill_brewer(palette = "Purples") +
+  labs(title = "Mật độ phân phối lương theo khu vực",
+       x = "Lương (USD)", y = "Mật độ") +
+  theme(legend.position = "none")
+
+grid.arrange(p_region_box, p_region_density, ncol = 2)
+```
+
+```{r eda-region-table}
+region_stats <- salary_model |>
+  group_by(company_region) |>
+  summarise(
+    n      = n(),
+    Mean   = mean(salary_in_usd),
+    Median = median(salary_in_usd),
+    SD     = sd(salary_in_usd),
+    IQR    = IQR(salary_in_usd),
+    CV_pct = round(SD / Mean * 100, 1),
+    .groups = "drop"
+  ) |>
+  arrange(desc(Median))
+
+region_stats |>
+  mutate(Mean = fmt(Mean), Median = fmt(Median),
+         SD = fmt(SD), IQR = fmt(IQR)) |>
+  kbl(caption = "Thống kê lương theo company_region (3 nhóm)",
+      col.names = c("Khu vực", "n", "Trung bình", "Trung vị",
+                    "Độ lệch chuẩn", "IQR", "CV (%)")) |>
+  kable_styling(bootstrap_options = c("striped", "hover"), font_size = 12)
+```
+
+Sau khi gộp còn 3 nhóm, `company_region` có cỡ mẫu đủ lớn để so sánh (**Northern_America** n = `r region_stats$n[region_stats$company_region == "Northern_America"]`, **Europe** n = `r region_stats$n[region_stats$company_region == "Europe"]`, **Rest_of_World** n = `r region_stats$n[region_stats$company_region == "Rest_of_World"]`). Về độ trải rộng: hệ số biến thiên (CV) của `r region_stats$company_region[which.max(region_stats$CV_pct)]` cao nhất (`r max(region_stats$CV_pct)`%) — khu vực này gộp nhiều thị trường lao động không đồng nhất (Asia, Latin America, Oceania, Africa) nên phân phối lương trải rộng hơn hẳn hai nhóm còn lại, đúng như dự đoán khi gộp nhóm. `Northern_America` vừa có trung vị cao nhất vừa có phân phối tương đối chụm hơn (CV thấp hơn Rest_of_World), phản ánh một thị trường lao động tương đối đồng nhất về mặt bằng lương. Biểu đồ density xác nhận đuôi phân phối của `Rest_of_World` kéo dài hơn, phù hợp với việc phải gộp nhiều khu vực có mặt bằng lương chênh lệch vào một nhóm.
+
+## Lương theo employment_type và cross_border
+
+Hai biến còn lại chưa được đối chiếu trực tiếp với `salary_in_usd`: `employment_type` (rất mất cân bằng — xem mục phân phối categorical) và `cross_border` (nhị phân).
+
+```{r eda-emptype-crossborder, fig.height=4.5}
+p_emp <- ggplot(salary_model,
+       aes(x = reorder(employment_type, salary_in_usd, median),
+           y = salary_in_usd, fill = employment_type)) +
+  geom_boxplot(alpha = 0.75, outlier.alpha = 0.4) +
+  scale_y_continuous(labels = label_comma(prefix = "$")) +
+  scale_fill_brewer(palette = "Greens") +
+  labs(title = "Lương theo loại hợp đồng",
+       subtitle = "PartTime/Contract/Freelance: cỡ mẫu rất nhỏ",
+       x = NULL, y = "Lương (USD)", fill = NULL) +
+  theme(legend.position = "none", axis.text.x = element_text(angle = 20, hjust = 1))
+
+p_cb <- salary_model |>
+  mutate(cross_border_lbl = factor(cross_border, levels = c(0, 1),
+                                    labels = c("Cùng quốc gia", "Xuyên biên giới"))) |>
+  ggplot(aes(x = cross_border_lbl, y = salary_in_usd, fill = cross_border_lbl)) +
+  geom_boxplot(alpha = 0.75, outlier.alpha = 0.4) +
+  scale_y_continuous(labels = label_comma(prefix = "$")) +
+  scale_fill_manual(values = c("Cùng quốc gia" = "#9ecae1", "Xuyên biên giới" = "#3182bd")) +
+  labs(title = "Lương theo cross_border",
+       x = NULL, y = NULL, fill = NULL) +
+  theme(legend.position = "none")
+
+grid.arrange(p_emp, p_cb, ncol = 2)
+```
+
+`employment_type` cho thấy trung vị Full-time không chênh lệch quá rõ so với 3 nhóm còn lại, nhưng cỡ mẫu quá nhỏ của PartTime/Contract/Freelance (dưới 20 quan sát mỗi nhóm) khiến khoảng tin cậy rất rộng — kết luận cần thận trọng. `cross_border` cho thấy hai nhóm khá tương đồng về trung vị, gợi ý làm việc xuyên biên giới tự nó không phải yếu tố quyết định mức lương — sẽ được kiểm định chính thức ở mục tiếp theo.
+
+## Xu hướng theo năm × cấp độ kinh nghiệm
+
+```{r eda-interaction-year-exp}
+year_exp <- salary_model |>
+  group_by(work_year, experience_level) |>
+  summarise(Mean = mean(salary_in_usd), n = n(), .groups = "drop")
+
+ggplot(year_exp, aes(x = work_year, y = Mean,
+                      color = experience_level, group = experience_level)) +
+  geom_line(linewidth = 1) +
+  geom_point(aes(size = n)) +
+  scale_y_continuous(labels = label_comma(prefix = "$")) +
+  scale_x_continuous(breaks = unique(year_exp$work_year)) +
+  scale_color_brewer(palette = "Blues") +
+  labs(
+    title    = "Xu hướng lương theo năm và cấp độ kinh nghiệm",
+    subtitle = "Kích thước điểm = số quan sát trong ô",
+    x = "Năm", y = "Lương trung bình (USD)",
+    color = "Kinh nghiệm", size = "n"
+  )
+```
+
+Biểu đồ cho thấy tất cả các nhóm đều có xu hướng tăng từ 2020 đến 2022, nhưng mức tăng không đồng đều. Khoảng cách giữa **Senior/Exec** và **Entry/Mid** ngày càng nới rộng — nhân sự cấp cao hưởng lợi nhiều hơn từ sự tăng trưởng của ngành. Đây gợi ý một *interaction effect* tiềm năng giữa `work_year` và `experience_level` — sẽ kiểm tra khi xây dựng mô hình.
+
+## Ma trận tương quan
+
+```{r corr-matrix, fig.height=5.5}
+# Chỉ mã hóa integer các biến phân loại CÓ THỨ TỰ TỰ NHIÊN (ordinal) để tính
+# tương quan Pearson: experience_level (Entry<Mid<Senior<Exec), company_size
+# (Small<Medium<Large), remote_ratio (Onsite<Hybrid<FullRemote).
+# job_category và employment_type là biến DANH NGHĨA (nominal, không thứ tự)
+# — mã hóa integer cho chúng sẽ áp đặt một thứ tự tùy ý (phụ thuộc alphabet
+# của factor levels) và làm sai lệch hệ số r; hai biến này được xem xét qua
+# boxplot (mục trên) và qua hệ số hồi quy dummy ở Phần mô hình hóa thay vì
+# đưa vào ma trận tương quan Pearson (Sheather 2009, §2.1).
+corr_data <- salary_model |>
+  mutate(
+    exp_int    = as.integer(experience_level),
+    size_int   = as.integer(company_size),
+    remote_int = as.integer(remote_ratio)
+  ) |>
+  select(salary_in_usd, work_year, exp_int, size_int, remote_int)
+
+names(corr_data) <- c("salary_in_usd", "work_year", "experience_level",
+                       "company_size", "remote_ratio")
+
+cor_mat <- cor(corr_data, use = "complete.obs")
+
+corrplot(cor_mat,
+         method      = "color",
+         type        = "upper",
+         addCoef.col = "black",
+         number.cex  = 0.75,
+         tl.cex      = 0.85,
+         tl.col      = "black",
+         col         = colorRampPalette(c("#d73027", "white", "#1a9850"))(200),
+         title       = "Ma trận tương quan Pearson",
+         mar         = c(0, 0, 1.5, 0))
+```
+
+```{r corr-target-table}
+cor_target <- cor_mat["salary_in_usd", -1]
+
+data.frame(
+  Biến         = names(cor_target),
+  r_Pearson    = round(cor_target, 3),
+  Cường_độ     = case_when(
+    abs(cor_target) >= 0.5 ~ "Mạnh",
+    abs(cor_target) >= 0.3 ~ "Trung bình",
+    abs(cor_target) >= 0.1 ~ "Yếu",
+    TRUE                    ~ "Rất yếu"
+  ),
+  row.names    = NULL
+) |>
+  arrange(desc(abs(r_Pearson))) |>
+  kbl(caption = "Tương quan Pearson giữa từng biến và salary_in_usd") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), font_size = 12) |>
+  column_spec(2, bold = TRUE,
+              color = ifelse(cor_target[order(-abs(cor_target))] > 0,
+                             "darkgreen", "red"))
+```
+
+Biến có tương quan mạnh nhất với `salary_in_usd` trong số các biến định lượng/thứ tự là **experience_level** (r = `r round(cor_mat["salary_in_usd","experience_level"], 3)`), xác nhận kinh nghiệm là yếu tố quyết định chính của mức lương. Các biến còn lại như `remote_ratio`, `company_size`, `work_year` có tương quan thấp hơn nhưng đóng góp thông tin bổ sung khi đứng chung trong mô hình đa biến (James et al. 2023, §3.1.2). `job_category` và `employment_type` không được đưa vào ma trận này vì là biến danh nghĩa không có thứ tự tự nhiên; mục "Lương theo nhóm chức danh" ở trên đã cho thấy `job_category` phân tầng lương rất rõ, và ảnh hưởng của nó sẽ được lượng hóa qua hệ số hồi quy dummy ở Phần mô hình hóa.
+
+Giữa các biến dự báo với nhau, không có cặp nào có \|r\| ≥ 0.7, gợi ý đa cộng tuyến song biến không nghiêm trọng. Tuy nhiên tương quan Pearson không phát hiện được đa cộng tuyến đa biến — cần kiểm tra VIF.
+
+## Kiểm định quan hệ đôi một (bivariate) với biến mục tiêu
+
+Các mục trên trình bày trực quan (boxplot/density) quan hệ giữa từng biến và `salary_in_usd`. Mục này kiểm định chính thức từng quan hệ đôi một đó bằng phương pháp phù hợp với kiểu biến:
+
+- **Biến phân loại ≥ 3 nhóm** (`experience_level`, `employment_type`, `company_size`, `remote_ratio`, `job_category`, `company_region`): kiểm định **ANOVA một chiều** (tham số, giả định phần dư chuẩn) song song với **Kruskal–Wallis** (phi tham số, dựa trên hạng — không cần giả định chuẩn). Vì `salary_in_usd` đã được xác nhận lệch phải ở mục phân phối biến mục tiêu, Kruskal–Wallis được xem là kiểm định chính; ANOVA dùng để đối chiếu.
+- **Biến nhị phân** (`cross_border`): **Welch t-test** (tham số, không giả định phương sai bằng nhau) song song với **Wilcoxon rank-sum** (phi tham số).
+- **Biến số liên tục/rời rạc có thứ tự** (`work_year`): hệ số tương quan **Pearson** song song với **Spearman** (dựa trên hạng, ít nhạy với lệch phân phối và outlier hơn).
+
+```{r bivariate-tests}
+# Biến phân loại đa nhóm: ANOVA + Kruskal-Wallis
+bivariate_cat_test <- function(data, var) {
+  f       <- as.formula(paste("salary_in_usd ~", var))
+  aov_res <- aov(f, data = data)
+  aov_p   <- summary(aov_res)[[1]][["Pr(>F)"]][1]
+  kw_res  <- kruskal.test(f, data = data)
+  data.frame(
+    Bien      = var,
+    Kiem_dinh = "ANOVA / Kruskal-Wallis",
+    Thong_ke  = paste0("F=", round(summary(aov_res)[[1]][["F value"]][1], 2),
+                        "; H=", round(unname(kw_res$statistic), 2)),
+    p_1       = round(aov_p, 4),
+    p_2       = round(kw_res$p.value, 4)
+  )
+}
+
+cat_vars  <- c("experience_level", "employment_type", "company_size",
+               "remote_ratio", "job_category", "company_region")
+bivar_cat <- bind_rows(lapply(cat_vars, bivariate_cat_test, data = salary_model))
+
+# Biến nhị phân cross_border: Welch t-test + Wilcoxon rank-sum
+t_res <- t.test(salary_in_usd ~ factor(cross_border), data = salary_model)
+w_res <- wilcox.test(salary_in_usd ~ factor(cross_border), data = salary_model)
+
+bivar_bin <- data.frame(
+  Bien      = "cross_border",
+  Kiem_dinh = "Welch t-test / Wilcoxon",
+  Thong_ke  = paste0("t=", round(unname(t_res$statistic), 2),
+                      "; W=", round(unname(w_res$statistic), 0)),
+  p_1       = round(t_res$p.value, 4),
+  p_2       = round(w_res$p.value, 4)
+)
+
+# Biến số work_year: Pearson + Spearman (exact = FALSE do work_year có nhiều giá trị trùng)
+pearson_res  <- cor.test(salary_model$salary_in_usd, salary_model$work_year, method = "pearson")
+spearman_res <- cor.test(salary_model$salary_in_usd, salary_model$work_year,
+                          method = "spearman", exact = FALSE)
+
+bivar_num <- data.frame(
+  Bien      = "work_year",
+  Kiem_dinh = "Pearson / Spearman",
+  Thong_ke  = paste0("r=", round(unname(pearson_res$estimate), 3),
+                      "; rho=", round(unname(spearman_res$estimate), 3)),
+  p_1       = round(pearson_res$p.value, 4),
+  p_2       = round(spearman_res$p.value, 4)
+)
+
+bivar_all <- bind_rows(bivar_cat, bivar_bin, bivar_num) |>
+  mutate(Ket_luan = ifelse(p_1 < 0.05 | p_2 < 0.05,
+                            "Có ý nghĩa (p < 0.05)", "Không có ý nghĩa")) |>
+  arrange(p_2)
+
+bivar_all |>
+  kbl(caption = "Kiểm định quan hệ đôi một giữa từng biến dự báo và salary_in_usd",
+      col.names = c("Biến", "Kiểm định (tham số / phi tham số)", "Thống kê",
+                    "p (tham số)", "p (phi tham số)", "Kết luận")) |>
+  kable_styling(bootstrap_options = c("striped", "hover"), font_size = 12) |>
+  column_spec(6, bold = TRUE,
+              color = ifelse(bivar_all$Ket_luan == "Có ý nghĩa (p < 0.05)",
+                             "darkgreen", "red"))
+```
+
+Kết quả kiểm định phi tham số (Kruskal–Wallis/Wilcoxon/Spearman — ưu tiên do `salary_in_usd` lệch phải) và tham số (ANOVA/t-test/Pearson) dùng để đối chiếu chéo. Biến nào có ý nghĩa ở cả hai loại kiểm định được xem là có bằng chứng thống kê vững nhất cho mối quan hệ với `salary_in_usd`; biến chỉ có ý nghĩa ở một loại kiểm định (ví dụ do vi phạm giả định chuẩn) cần diễn giải thận trọng hơn. Bảng này bổ sung — chứ không thay thế — ma trận tương quan Pearson ở trên, vì bao phủ được cả các biến danh nghĩa (`job_category`, `employment_type`, `company_region`) không thể đưa vào ma trận tương quan.
+
+## Kiểm tra đa cộng tuyến (VIF)
+
+```{r vif-check}
+lm_vif <- lm(salary_in_usd ~ work_year + experience_level +
+               employment_type + company_size + remote_ratio + job_category +
+               company_region + cross_border,
+             data = salary_model)
+
+vif_raw <- vif(lm_vif)
+
+# Với factor nhiều mức, car::vif() trả về GVIF
+# Giá trị so sánh: GVIF^(1/(2·Df)), tương đương √VIF
+if (is.matrix(vif_raw)) {
+  vif_df <- data.frame(
+    Biến      = rownames(vif_raw),
+    GVIF      = round(vif_raw[, "GVIF"], 3),
+    Df        = as.integer(vif_raw[, "Df"]),
+    GVIF_adj  = round(vif_raw[, "GVIF^(1/(2*Df))"], 3),
+    Đánh_giá = case_when(
+      vif_raw[, "GVIF^(1/(2*Df))"] > sqrt(10) ~ "⚠ Nghiêm trọng (> √10)",
+      vif_raw[, "GVIF^(1/(2*Df))"] > sqrt(5)  ~ "⚡ Trung bình (> √5)",
+      TRUE                                      ~ "✓ Chấp nhận được"
+    ),
+    row.names = NULL
+  )
+
+  vif_df |>
+    kbl(caption = "Generalized VIF (GVIF) — biến phân loại nhiều mức",
+        col.names = c("Biến", "GVIF", "Df", "GVIF^(1/2Df)", "Đánh giá")) |>
+    kable_styling(bootstrap_options = c("striped", "hover"), font_size = 12) |>
+    column_spec(5,
+                color = ifelse(grepl("Nghiêm trọng|Trung bình", vif_df$Đánh_giá),
+                               "red", "darkgreen"),
+                bold = TRUE)
+} else {
+  vif_df <- data.frame(
+    Biến     = names(vif_raw),
+    VIF      = round(vif_raw, 3),
+    Đánh_giá = case_when(
+      vif_raw > 10 ~ "⚠ Nghiêm trọng (VIF > 10)",
+      vif_raw > 5  ~ "⚡ Trung bình (VIF > 5)",
+      TRUE          ~ "✓ Chấp nhận được"
+    ),
+    row.names = NULL
+  )
+
+  vif_df |>
+    kbl(caption = "Variance Inflation Factor (VIF)") |>
+    kable_styling(bootstrap_options = c("striped", "hover"), font_size = 12) |>
+    column_spec(3,
+                color = ifelse(grepl("Nghiêm trọng|Trung bình", vif_df$Đánh_giá),
+                               "red", "darkgreen"),
+                bold = TRUE)
+}
+```
+
+Với biến phân loại nhiều mức, `car::vif()` tự động tính **GVIF** (Generalized VIF). Giá trị so sánh với ngưỡng là GVIF\^(1/(2·Df)) — tương đương √VIF cho biến nhị phân (Fox & Monette 1992, trích trong tài liệu `car`). Ngưỡng cảnh báo thông thường là √10 ≈ 3.16 cho mức nghiêm trọng và √5 ≈ 2.24 cho mức trung bình (James et al. 2023, §3.3.3). Kết quả VIF xác định liệu cần chiến lược xử lý đa cộng tuyến đặc biệt hay các phương pháp regularization thông thường (Ridge/Elastic Net) là đủ — Ridge vốn được thiết kế để xử lý đa cộng tuyến bằng hình phạt L2 (Zou & Hastie 2005).
+
+## Phân phối các biến phân loại
+
+```{r eda-catbars, fig.height=6}
+p1 <- ggplot(salary_model, aes(x = experience_level, fill = experience_level)) +
+  geom_bar() + scale_fill_brewer(palette = "Blues") +
+  labs(title = "Cấp độ kinh nghiệm", x = NULL, y = "n") +
+  theme(legend.position = "none")
+
+p2 <- ggplot(salary_model, aes(x = employment_type, fill = employment_type)) +
+  geom_bar() + scale_fill_brewer(palette = "Greens") +
+  labs(title = "Loại hợp đồng", x = NULL, y = NULL) +
+  theme(legend.position = "none")
+
+p3 <- ggplot(salary_model, aes(x = company_size, fill = company_size)) +
+  geom_bar() +
+  scale_fill_manual(values = c("Small"="#74c476","Medium"="#31a354","Large"="#006d2c")) +
+  labs(title = "Quy mô công ty", x = NULL, y = "n") +
+  theme(legend.position = "none")
+
+p4 <- ggplot(salary_model, aes(x = remote_ratio, fill = remote_ratio)) +
+  geom_bar() + scale_fill_brewer(palette = "Oranges") +
+  labs(title = "Chế độ làm việc", x = NULL, y = NULL) +
+  theme(legend.position = "none")
+
+p5 <- salary_model |>
+  count(job_category) |>
+  ggplot(aes(x = reorder(job_category, n), y = n, fill = job_category)) +
+  geom_col(show.legend = FALSE) +
+  geom_text(aes(label = n), hjust = -0.2, size = 3.2) +
+  scale_fill_brewer(palette = "Set2") +
+  coord_flip() +
+  ylim(0, max(count(salary_model, job_category)$n) * 1.2) +
+  labs(title = "Nhóm chức danh", x = NULL, y = "n")
+
+grid.arrange(p1, p2, p3, p4, p5,
+             layout_matrix = rbind(c(1,2,3,4), c(5,5,5,5)),
+             top = textGrob("Phân phối các biến phân loại",
+                            gp = gpar(fontsize = 13, fontface = "bold")))
+```
+
+Ba điểm đáng chú ý: (1) **`employment_type`** gần như toàn bộ là Full-time — hơn 95% — đồng nghĩa các nhóm PartTime, Contract, Freelance có cỡ mẫu rất nhỏ, hệ số của chúng sẽ kém tin cậy; (2) **`experience_level`** phân tầng tương đối đồng đều giữa Mid, Senior, Exec nhưng Entry-level ít hơn — cần ghi nhớ khi diễn giải; (3) **`job_category`** nhóm "Other" nhỏ nhất có thể gộp vào nhóm gần nhất nếu cần trong bước mô hình hóa.
+
+------------------------------------------------------------------------
+
+# TÓM TẮT PHẦN 1
+
+```{r final-summary}
+n_preds <- ncol(salary_model) - 1  # trừ biến mục tiêu
+
+data.frame(
+  Hạng_mục   = c(
+    "Cỡ mẫu cuối",
+    "Biến mục tiêu",
+    "Số biến dự báo",
+    "Dữ liệu thiếu",
+    "Outlier xử lý",
+    "Biến bị loại/thay thế (5 biến)",
+    "Feature mới tạo ra",
+    "Lưu ý mô hình hóa"
+  ),
+  Chi_tiết   = c(
+    paste0(nrow(salary_model), " quan sát — giữ nguyên 607"),
+    paste0("salary_in_usd — phân phối lệch phải; cân nhắc log-transform"),
+    paste0(n_preds, " biến (", n_preds - 1, " categorical + 1 numeric)"),
+    "0 NA — không cần imputation",
+    paste0("Winsorize một chiều tại phân vị 99% (chặn trên); ", n_above, " quan sát được điều chỉnh"),
+    "salary, salary_currency, job_title, employee_residence, company_location",
+    "job_category (5 nhóm chức năng); company_region (gộp còn 3 nhóm từ M49); cross_border (0/1)",
+    "experience_level là yếu tố dự báo mạnh nhất trong nhóm biến thứ tự; job_category phân tầng lương rõ qua boxplot (không tách riêng nhóm Manager/Lead)"
+  ),
+  row.names   = NULL
+) |>
+  kbl(caption = "Tổng kết Phần 1: Tiền xử lý & EDA") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), font_size = 12) |>
+  column_spec(1, bold = TRUE)
+```
+
+Phần 1 hoàn thành hai nhiệm vụ nền tảng. Về tiền xử lý: bộ dữ liệu sạch từ đầu, nhưng cần xử lý kỹ số lượng biến phân loại và mức độ chi tiết của nhóm chức danh — hai quyết định này ảnh hưởng trực tiếp đến chất lượng mô hình. Về EDA: ba yếu tố nổi bật quyết định mức lương trong ngành Data Science là **kinh nghiệm** (yếu tố mạnh nhất), **loại chức danh** (`r job_stats$job_category[1]` dẫn đầu về trung vị), và **xu hướng tăng theo thời gian** (2020→2022). Phân phối lệch phải của `salary_in_usd` gợi ý mô hình nên kiểm tra cả phiên bản `log(salary_in_usd)` làm biến mục tiêu — bước này sẽ được thực hiện khi kiểm định BLUE ở Phần 3.
+
+------------------------------------------------------------------------
+
+# TÀI LIỆU THAM KHẢO
+
+Bingham, N. H., & Fry, J. M. (2010). *Regression Analysis: A Constructive Critique*. Springer.
+
+James, G., Witten, D., Hastie, T., & Tibshirani, R. (2023). *An Introduction to Statistical Learning with Applications in R* (2nd ed.). Springer.
+
+Sheather, S. J. (2009). *A Modern Approach to Regression with R*. Springer.
+
+United Nations Statistics Division. (2023). *Standard country or area codes for statistical use (M49)*. United Nations. https://unstats.un.org/unsd/methodology/m49/
+
+Zou, H., & Hastie, T. (2005). Regularization and variable selection via the elastic net. *Journal of the Royal Statistical Society: Series B*, 67(2), 301–320.
