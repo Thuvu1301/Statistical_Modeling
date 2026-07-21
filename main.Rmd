@@ -20,7 +20,7 @@ output:
     df_print: paged
 
 fontsize: 11pt
-geometry: margin=2.5cm
+geometry: margin=2cm
 mainfont: "Times New Roman"
 
 bibliography: references.bib
@@ -34,9 +34,11 @@ header-includes:
   - \usepackage{amssymb}
   - \usepackage{booktabs}
   - \usepackage{graphicx}
+  - \usepackage{underscore}
   - \let\maketitle\relax
   - \renewcommand{\contentsname}{Mục lục}
   - \setcounter{tocdepth}{2}
+  - \definecolor{darkgreen}{HTML}{006400}
 
 editor_options:
   markdown:
@@ -115,7 +117,9 @@ knitr::opts_chunk$set(
 
 \newpage
 
-```{r child=here::here("Part_3_FreeChoice", "Part_3_FreeChoice.Rmd")}
+Phần 3 (Bộ dữ liệu tự chọn) tạm thời chưa được đưa vào bản PDF này: `Part_3_FreeChoice/output/Part_1_FreeChoi_123.Rmd` cần file dữ liệu `../DoAn/bike_sharing_hour.csv` hiện chưa có sẵn. Đặt `eval = TRUE` ở chunk dưới đây (và bổ sung file dữ liệu) để đưa Phần 3 trở lại bản PDF.
+
+```{r child=here::here("Part_3_FreeChoice", "Part_3_FreeChoice.Rmd"), eval=FALSE}
 ```
 
 # Tài liệu tham khảo

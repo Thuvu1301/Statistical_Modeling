@@ -1,4 +1,33 @@
-# Part 2: Mức lương ở các vị trí việc làm trong lĩnh vực khoa học dữ liệu
+---
+output:
+  html_document:
+    theme: flatly
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+    toc_depth: 3
+    number_sections: true
+    df_print: paged
+  pdf_document:
+    toc: false
+    number_sections: true
+    latex_engine: xelatex
+    keep_tex: false
+fontsize: 11pt
+geometry: margin=2cm
+mainfont: "Times New Roman"
+header-includes:
+  - \usepackage{float}
+  - \usepackage{amsmath}
+  - \usepackage{amssymb}
+  - \usepackage{booktabs}
+  - \usepackage{graphicx}
+  - \usepackage{underscore}
+  - \definecolor{darkgreen}{HTML}{006400}
+---
+
+# Đề tài 2: Mức lương ở các vị trí việc làm trong lĩnh vực khoa học dữ liệu
 
 ```{r p2-setup, include=FALSE}
 if (!requireNamespace("here", quietly = TRUE)) install.packages("here")
@@ -6,17 +35,17 @@ source(here::here("config", "setup.R"))
 knitr::opts_chunk$set(fig.align = "center")
 ```
 
-```{r child=here::here("Part_2_SalaryDS","Part_1_SalaryDS_AB.Rmd")}
+```{r child=here::here("Part_2_SalaryDS","output","Part_1_SalaryDS_AB.Rmd")}
 ```
 
-```{r child=here::here("Part_2_SalaryDS","Part_2_SalaryDS_C.Rmd")}
+```{r child=here::here("Part_2_SalaryDS","output","Part_2_SalaryDS_C.Rmd")}
 ```
 
-```{r child=here::here("Part_2_SalaryDS","Part_3_SalaryDS_DE.Rmd")}
+```{r child=here::here("Part_2_SalaryDS","output","Part_3_SalaryDS_DE.Rmd")}
 ```
 
-```{r child=here::here("Part_2_SalaryDS","Part_4_SalaryDS_FG.Rmd")}
+```{r child=here::here("Part_2_SalaryDS","output","Part_4_SalaryDS_FG.Rmd")}
 ```
 
-```{r child=here::here("Part_2_SalaryDS","Part_5_SalaryDS_H.Rmd")}
+```{r child=here::here("Part_2_SalaryDS","output","Part_5_SalaryDS_H.Rmd")}
 ```

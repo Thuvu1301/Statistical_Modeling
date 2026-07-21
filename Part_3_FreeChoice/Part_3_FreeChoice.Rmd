@@ -6,7 +6,7 @@ source(here::here("config", "setup.R"))
 knitr::opts_chunk$set(fig.align = "center")
 ```
 
-```{r setup, include=FALSE}
+```{r p3-setup-opts, include=FALSE}
 knitr::opts_chunk$set(
   echo = FALSE,
   warning = FALSE,
@@ -19,19 +19,14 @@ library(car)
 library(corrplot)
 ```
 
-```{r child=here::here("Part_3_FreeChoice","Part_1_FreeChoi_123.Rmd")}
+```{r child=here::here("Part_3_FreeChoice","output","Part_1_FreeChoi_123.Rmd")}
 ```
 
-```{r child=here::here("Part_3_FreeChoice","Part_2_FreeChoice_4.Rmd")}
+```{r child=here::here("Part_3_FreeChoice","output","Part_2_FreeChoi_4.Rmd")}
 ```
 
-```{r child=here::here("Part_3_FreeChoice","Part_3_FreeChoice_5.Rmd")}
+```{r child=here::here("Part_3_FreeChoice","output","Part_3_FreeChoi_5.Rmd")}
 ```
 
-```{r child=here::here("Part_3_FreeChoice","Part_4_FreeChoice_6.Rmd")}
+```{r child=here::here("Part_3_FreeChoice","output","Part_4_FreeChoi_6.Rmd")}
 ```
-
-
-
-
-

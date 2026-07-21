@@ -1,7 +1,330 @@
+## Kiểm tra sâu hơn và đề xuất cải tiến mô hình
 
-<!--
+**Mục tiêu.** Kiểm chứng độ tin cậy của mô hình đã chọn bằng các phương pháp thay thế ít dựa vào giả định phân phối chuẩn — vì bảng BLUE đã ghi nhận `r n_vi_pham`/5 giả định bị vi phạm cho Mô hình 1 (RESET p `r format.pval(reset_ols$p.value, digits = 3, eps = 1e-16)`, Breusch–Pagan p `r format.pval(bp_ols$p.value, digits = 3, eps = 1e-16)`, Durbin–Watson p `r format.pval(dw_ols$p.value, digits = 3, eps = 1e-16)`, Shapiro–Wilk bác bỏ mạnh giả định chuẩn). Phần này đào sâu bằng năm nhóm phân tích bổ sung: quan trắc ảnh hưởng mạnh, độ nhạy hệ số qua hồi quy vững, kiểm định hoán vị, kích thước hiệu ứng, và biến đổi mục tiêu (log, Box–Cox) — rồi tổng hợp thành khuyến nghị cụ thể ở mục cuối.
 
-## Đề xuất cải thiện
+```{r h-packages}
+if (!requireNamespace("robustbase", quietly = TRUE)) install.packages("robustbase")
+if (!requireNamespace("effectsize", quietly = TRUE)) install.packages("effectsize")
+if (!requireNamespace("MASS", quietly = TRUE)) install.packages("MASS")
+library(robustbase)
+library(effectsize)
+# MASS KHÔNG được attach bằng library() — MASS::select() sẽ che khuất
+# dplyr::select() dùng xuyên suốt các chunk bên dưới; chỉ gọi MASS::boxcox()
+# trực tiếp bằng namespace khi cần.
+```
 
-*(TODO: đề xuất hướng cải thiện mô hình / phương pháp phân tích khác.)*
--->
+Mô hình tham chiếu xuyên suốt phần này là một hồi quy trên **toàn bộ 565 quan sát** (khác với Phần Xây dựng mô hình dự đoán vốn chỉ ước lượng trên tập huấn luyện), loại `work_year` và `remote_ratio` — hai biến không có ý nghĩa thống kê trong bảng hệ số OLS ở Phần Xây dựng mô hình dự đoán (Mô hình 1) — để tập trung chẩn đoán sâu vào các yếu tố ảnh hưởng chính:
+
+```{r h-refit-base}
+m_reduced <- lm(salary_in_usd ~ experience_level + employment_type + company_size +
+                   job_category + company_region + cross_border, data = salary_model)
+```
+
+```{r h-refit-coef}
+shapiro_h <- shapiro.test(residuals(m_reduced))
+skew_h    <- mean((residuals(m_reduced) - mean(residuals(m_reduced)))^3) / sd(residuals(m_reduced))^3
+p_contract_h <- broom::tidy(m_reduced) |>
+  filter(term == "employment_typeContract") |> pull(p.value)
+```
+
+Shapiro–Wilk trên phần dư của mô hình này cho W = `r round(unname(shapiro_h$statistic), 3)`, p `r format.pval(shapiro_h$p.value, digits = 3, eps = 1e-16)` (skewness `r round(skew_h, 2)`) — xác nhận lại vi phạm chuẩn đã thấy ở Phần Xây dựng mô hình dự đoán, lần này trên toàn bộ dữ liệu thay vì chỉ tập huấn luyện. Đây là động lực cho các phương pháp thay thế ở phần này.
+
+### Quan trắc ảnh hưởng: Cook's distance
+
+**Mục tiêu.** Xác định xem kết luận của mô hình tham chiếu có bị chi phối bởi một vài quan trắc đơn lẻ hay không — khác với kiểm định chuẩn phần dư (đánh giá hình dạng tổng thể), Cook's distance định vị **từng quan trắc cụ thể** có ảnh hưởng bất thường lên hệ số. Đây là thước đo chẩn đoán (không có H0/H1 hay p-value), dùng ngưỡng kinh nghiệm $4/n$ để khoanh vùng quan trắc cần xem xét thêm.
+
+```{r h-cooks, fig.height=3}
+nguong_cook <- 4 / nrow(salary_model)
+cook_d <- cooks.distance(m_reduced)
+
+ggplot(data.frame(idx = seq_along(cook_d), cook = cook_d), aes(x = idx, y = cook)) +
+  geom_hline(yintercept = nguong_cook, linetype = "dashed", color = "firebrick") +
+  geom_segment(aes(xend = idx, y = 0, yend = cook), color = COL_PRIMARY, alpha = 0.6) +
+  labs(title = "Cook's distance của từng quan trắc — mô hình tham chiếu",
+       subtitle = paste0("Đường đứt nét: ngưỡng tham khảo 4/n = ", round(nguong_cook, 4)),
+       x = "Số thứ tự quan trắc", y = "Cook's distance")
+```
+
+```{r h-cooks-table}
+top5_cook <- order(cook_d, decreasing = TRUE)[1:5]
+
+salary_model[top5_cook, ] |>
+  mutate(Cooks_D = round(cook_d[top5_cook], 4), .before = 1) |>
+  select(Cooks_D, salary_in_usd, experience_level, employment_type,
+         job_category, company_region) |>
+  mutate(salary_in_usd = fmt(salary_in_usd)) |>
+  kbl(booktabs = TRUE, caption = "5 quan trắc có Cook's distance lớn nhất") |>
+  kable_styling(bootstrap_options = c("hover"), latex_options = c("HOLD_position", "scale_down"), font_size = 11)
+```
+
+`r sum(cook_d > nguong_cook)`/`r nrow(salary_model)` quan trắc vượt ngưỡng 4/n, nhưng Cook's distance lớn nhất chỉ `r round(max(cook_d), 3)` — xa ngưỡng 1 thường dùng để cảnh báo một điểm chi phối toàn mô hình. Đáng chú ý hơn là **thành phần** của 5 quan trắc ảnh hưởng nhất: phần lớn thuộc `employment_type = Contract` ở mức lương cao — gợi ý hệ số `Contract` (dương, có ý nghĩa, p ≈ `r round(p_contract_h, 3)`) có thể không ổn định vì nhóm này chỉ có 5 quan sát. Mục tiếp theo kiểm tra trực tiếp bằng hai phương pháp độc lập.
+
+### Độ nhạy của hệ số với outlier: hồi quy vững và loại thử quan trắc ảnh hưởng
+
+**Mục tiêu.** Cook's distance chỉ **định vị** quan trắc nghi ngờ, chưa cho biết loại bỏ chúng có thay đổi kết luận không. Hai phương pháp độc lập được chạy song song: (i) **hồi quy vững MM-estimation** (Yohai 1987, `robustbase::lmrob`) — giữ toàn bộ 565 quan sát nhưng tự động giảm trọng số các điểm có phần dư lớn; (ii) **loại thử 5 quan trắc** có Cook's distance lớn nhất rồi ước lượng lại OLS:
+
+```{r h-robust}
+m_robust <- lmrob(salary_in_usd ~ experience_level + employment_type + company_size +
+                     job_category + company_region + cross_border,
+                   data = salary_model,
+                   control = lmrob.control(setting = "KS2014"))
+
+m_sensitivity <- lm(salary_in_usd ~ experience_level + employment_type + company_size +
+                       job_category + company_region + cross_border,
+                     data = salary_model[-top5_cook, ])
+
+lech_robust_pct <- abs((coef(m_robust) - coef(m_reduced)) / abs(coef(m_reduced)))
+
+data.frame(
+  Bien          = names(coef(m_reduced)),
+  OLS_565       = round(coef(m_reduced), 0),
+  Robust_MM     = round(coef(m_robust), 0),
+  Loai_5_CookD  = round(coef(m_sensitivity), 0)
+) |>
+  kbl(booktabs = TRUE, caption = "Hệ số mô hình tham chiếu dưới ba cách ước lượng: OLS đầy đủ, hồi quy vững MM, và OLS sau khi loại 5 quan trắc Cook's D lớn nhất",
+      col.names = c("Biến", "OLS (565 qs)", "Robust MM", "Loại top-5 Cook's D")) |>
+  kable_styling(bootstrap_options = c("hover"), latex_options = c("HOLD_position", "scale_down"), font_size = 11) |>
+  column_spec(3, bold = TRUE,
+              color = ifelse(lech_robust_pct > 0.3, "red", "black"))
+```
+
+```{r h-robust-weights}
+robust_w <- summary(m_robust)$rweights
+n_hard_outlier <- sum(robust_w < 0.01)
+```
+
+Cả hai phương pháp cho cùng bức tranh. Hệ số `employment_typeContract` **sụp đổ mạnh nhất**: giảm hơn 90% dưới ước lượng vững và đổi hẳn độ lớn khi loại 5 quan trắc ảnh hưởng — xác nhận hệ số dương của Contract trong OLS phần lớn do vài quan sát lương cao trong nhóm chỉ 5 quan sát chi phối, không phải hiệu ứng ổn định. Ngược lại, `experience_level`, `job_category`, `company_region` thay đổi rất ít ở cả hai cột; R² gần như không đổi (`r round(summary(m_reduced)$r.squared, 4)` → `r round(summary(m_sensitivity)$r.squared, 4)`). Có `r n_hard_outlier` quan trắc bị gán trọng số gần 0 (outlier cứng), gồm cả quan trắc lương cao nhất mẫu.
+
+### Kiểm định hoán vị (permutation test) cho `company_region`
+
+**Mục tiêu.** Vì phần dư vi phạm giả định chuẩn, giá trị p của partial F-test lý thuyết cho `company_region` — nhân tố ảnh hưởng mạnh nhất theo cả ANOVA Type II lẫn Ridge — chỉ là xấp xỉ. Mục này kiểm định lại bằng phương pháp **không cần** giả định phân phối chuẩn: hoán vị ngẫu nhiên phần dư của mô hình không có `company_region`, cộng vào giá trị dự đoán để tạo dữ liệu giả lập dưới $H_0$, rồi tính lại thống kê F trên mỗi bộ hoán vị. Cặp giả thuyết:
+
+$H_0: \text{sau khi đã kiểm soát } \texttt{experience\_level}, \texttt{employment\_type}, \texttt{company\_size}, \texttt{job\_category}, \texttt{cross\_border}, \; \texttt{company\_region} \text{ không có thêm hiệu ứng lên } \texttt{salary\_in\_usd} \quad (\text{biết thêm khu vực công ty không giúp dự đoán lương chính xác hơn})$  
+$H_1: \texttt{company\_region} \text{ vẫn có hiệu ứng lên } \texttt{salary\_in\_usd} \text{ sau khi đã kiểm soát các nhân tố trên} \quad (\text{khu vực công ty vẫn ảnh hưởng thực sự đến lương})$
+
+```{r h-permutation}
+set.seed(2026)
+f_khong_region <- salary_in_usd ~ experience_level + employment_type + company_size +
+  job_category + cross_border
+f_co_region    <- update(f_khong_region, . ~ . + company_region)
+
+m0 <- lm(f_khong_region, data = salary_model)
+F_quan_sat <- anova(m0, lm(f_co_region, data = salary_model))$F[2]
+
+phan_du_0    <- residuals(m0)
+gia_tri_du_doan_0 <- fitted(m0)
+
+so_lan_hoan_vi <- 2000
+F_hoan_vi <- numeric(so_lan_hoan_vi)
+du_lieu_hoan_vi <- salary_model
+for (i in seq_len(so_lan_hoan_vi)) {
+  du_lieu_hoan_vi$y_perm <- gia_tri_du_doan_0 + sample(phan_du_0)
+  m0p <- lm(update(f_khong_region, y_perm ~ .), data = du_lieu_hoan_vi)
+  m1p <- lm(update(f_co_region, y_perm ~ .), data = du_lieu_hoan_vi)
+  F_hoan_vi[i] <- anova(m0p, m1p)$F[2]
+}
+p_hoan_vi <- (sum(F_hoan_vi >= F_quan_sat) + 1) / (so_lan_hoan_vi + 1)
+```
+
+```{r h-permutation-plot, fig.height=2.8}
+ggplot(data.frame(F = F_hoan_vi), aes(x = F)) +
+  geom_histogram(bins = 40, fill = COL_PRIMARY, color = "white") +
+  geom_vline(xintercept = F_quan_sat, color = "firebrick", linewidth = 0.9) +
+  labs(title = "Phân phối F từ 2000 lần hoán vị cho company_region",
+       subtitle = paste0("Đường đỏ: F quan sát = ", round(F_quan_sat, 1),
+                          " — không có lần hoán vị nào vượt qua"),
+       x = "Thống kê F (hoán vị)", y = "Số lần")
+```
+
+Trong toàn bộ `r so_lan_hoan_vi` lần hoán vị, không lần nào tạo ra F ≥ F quan sát (`r round(F_quan_sat, 2)`), cho $p_{hoán vị} \approx$ `r round(p_hoan_vi, 4)` — cùng kết luận với partial F-test lý thuyết vừa tính ở trên (F `r round(F_quan_sat, 1)`, p < 0.0001), nhưng lần này **không phụ thuộc** vào giả định phần dư có phân phối chuẩn. Kết quả củng cố rằng hiệu ứng `company_region` là một hiệu ứng thực sự trong dữ liệu, không phải hệ quả giả tạo từ việc vi phạm giả định.
+
+### Kích thước hiệu ứng (effect size) bên cạnh giá trị p
+
+**Mục tiêu.** Partial F-test và permutation test chỉ cho biết một nhân tố có ý nghĩa thống kê hay không, chưa cho biết **độ lớn thực tế** — với cỡ mẫu 565, ngay cả hiệu ứng nhỏ cũng có thể đạt ý nghĩa. Mục này bổ sung góc nhìn độ lớn bằng $\eta^2$ riêng phần (partial eta-squared) — chỉ số mô tả (không có H0/H1) đo tỷ lệ biến động của `salary_in_usd` mỗi nhân tố giải thích được sau khi loại bỏ phần do các nhân tố khác:
+
+```{r h-effect-size, fig.height=2.8}
+# Goi ro namespace vi ca rstatix (nap o phan truoc) lan effectsize deu co
+# ham eta_squared — tranh phu thuoc thu tu nap goi
+eta2_tbl <- effectsize::eta_squared(m_reduced, partial = TRUE)
+
+ggplot(as.data.frame(eta2_tbl), aes(x = reorder(Parameter, Eta2_partial), y = Eta2_partial)) +
+  geom_col(fill = COL_PRIMARY) +
+  geom_hline(yintercept = 0.14, linetype = "dashed", color = "firebrick") +
+  coord_flip() +
+  labs(title = "Eta-squared riêng phần của từng nhân tố — mô hình tham chiếu",
+       subtitle = "Đường đứt nét: ngưỡng \"lớn\" theo quy ước Cohen (η²ₚ > 0.14)",
+       x = NULL, y = expression(eta[partial]^2))
+```
+
+`experience_level` (η²ₚ ≈ `r round(eta2_tbl$Eta2_partial[eta2_tbl$Parameter=="experience_level"], 2)`) và `company_region` (η²ₚ ≈ `r round(eta2_tbl$Eta2_partial[eta2_tbl$Parameter=="company_region"], 2)`) là hai nhân tố duy nhất vượt ngưỡng "lớn" theo Cohen — nhất quán với hệ số chuẩn hoá Ridge và kiểm định hoán vị ở mục trên. `employment_type`, `company_size`, `job_category`, `cross_border` đều có ý nghĩa thống kê nhưng η²ₚ dưới 0.05 — có ý nghĩa nhưng đóng góp thực tế khiêm tốn.
+
+### Biến đổi mục tiêu: từ log đơn giản đến Box–Cox tối ưu
+
+#### Mô hình bổ sung — OLS trên log(salary_in_usd)
+
+**Mục tiêu.** Bảng BLUE xác nhận phần dư của Mô hình 1 vi phạm mạnh giả định chuẩn (Shapiro–Wilk). Hướng xử lý tiêu chuẩn là biến đổi log biến mục tiêu (Sheather 2009, §3.4) — trường hợp đặc biệt $\lambda = 0$ của Box–Cox. Mục này ước lượng log-OLS như mô hình bổ sung, kiểm tra xem biến đổi này có khắc phục vi phạm chuẩn và cải thiện dự đoán trên thang USD gốc hay không — trước khi tổng quát hoá bằng Box–Cox chính thức ở mục kế tiếp.
+
+```{r h-model-log}
+f_log <- as.formula(paste("log(salary_in_usd) ~", paste(predictors_all, collapse = " + ")))
+m_log <- lm(f_log, data = train_df)
+summary(m_log)
+```
+
+```{r h-log-stats}
+s_log  <- summary(m_log)
+co_log <- coef(m_log)
+pct_senior <- 100 * (exp(co_log["experience_levelSenior"]) - 1)
+pct_exec   <- 100 * (exp(co_log["experience_levelExec"]) - 1)
+pct_eu     <- 100 * (exp(co_log["company_regionEurope"]) - 1)
+pct_row    <- 100 * (exp(co_log["company_regionRest_of_World"]) - 1)
+pct_cb     <- 100 * (exp(co_log["cross_border"]) - 1)
+
+# He so hieu chinh Duan smearing: trung binh cua exp(phan du) tren tap huan luyen
+smear_factor <- mean(exp(residuals(m_log)))
+```
+
+Trên thang log, hệ số $\beta$ của biến giả diễn giải thành **phần trăm chênh lệch**: $100(e^\beta - 1)\%$. **Senior** cao hơn Entry khoảng `r round(pct_senior, 1)`%, **Exec** cao hơn khoảng `r round(pct_exec, 1)`%; **Europe** thấp hơn Bắc Mỹ khoảng `r round(abs(pct_eu), 1)`%, **Rest_of_World** thấp hơn khoảng `r round(abs(pct_row), 1)`%; làm việc xuyên biên giới gắn với mức giảm khoảng `r round(abs(pct_cb), 1)`%. Cách diễn giải theo tỷ lệ này tự nhiên hơn với dữ liệu lương, vì mức tăng lương thường được thoả thuận theo phần trăm.
+
+Khi quy đổi dự đoán từ thang log về thang gốc, dùng $\exp(\hat y)$ đơn thuần sẽ **chệch xuống một cách hệ thống** vì $E[\exp(\hat y)] \neq \exp(E[\hat y])$ khi phần dư không chuẩn; mô hình áp dụng hệ số hiệu chỉnh **Duan smearing** (Duan 1983) — trung bình của $\exp(\text{phần dư})$ trên tập huấn luyện, ở đây bằng `r round(smear_factor, 4)`.
+
+**Kiểm định lại BLUE trên thang log — biến đổi log có thực sự khắc phục vi phạm không?** Cùng bốn kiểm định giả thuyết đã dùng cho Mô hình 1 ở Phần Xây dựng mô hình dự đoán (RESET, Breusch–Pagan, Durbin–Watson, Shapiro–Wilk — cặp $H_0$/$H_1$ như đã nêu ở mục BLUE tương ứng) được chạy lại trên `m_log`:
+
+```{r h-blue-log}
+reset_log   <- lmtest::resettest(m_log, power = 2:3, type = "fitted")
+bp_log      <- lmtest::bptest(m_log)
+dw_log      <- lmtest::dwtest(m_log)
+shapiro_log <- shapiro.test(residuals(m_log))
+
+bang_blue_log <- data.frame(
+  Gia_dinh       = c("Tuyến tính (RESET)", "Phương sai đồng nhất (Breusch–Pagan)",
+                      "Không tự tương quan (Durbin–Watson)", "Chuẩn phần dư (Shapiro–Wilk)"),
+  Mo_hinh_1_goc  = c(
+    ifelse(reset_ols$p.value < 0.05, "Vi phạm", "Không vi phạm"),
+    ifelse(bp_ols$p.value    < 0.05, "Vi phạm", "Không vi phạm"),
+    ifelse(dw_ols$p.value    < 0.05, "Vi phạm", "Không vi phạm"),
+    ifelse(shapiro_ols$p.value < 0.05, "Vi phạm", "Không vi phạm")
+  ),
+  Mo_hinh_log  = c(
+    ifelse(reset_log$p.value < 0.05, "Vi phạm", "Không vi phạm"),
+    ifelse(bp_log$p.value    < 0.05, "Vi phạm", "Không vi phạm"),
+    ifelse(dw_log$p.value    < 0.05, "Vi phạm", "Không vi phạm"),
+    ifelse(shapiro_log$p.value < 0.05, "Vi phạm", "Không vi phạm")
+  )
+)
+
+n_vipham_ols4 <- sum(c(reset_ols$p.value, bp_ols$p.value, dw_ols$p.value, shapiro_ols$p.value) < 0.05)
+n_vipham_log4 <- sum(c(reset_log$p.value, bp_log$p.value, dw_log$p.value, shapiro_log$p.value) < 0.05)
+
+bang_blue_log |>
+  kbl(booktabs = TRUE, caption = "Đối chiếu bốn giả định BLUE giữa Mô hình 1 (OLS thang gốc) và mô hình log-OLS (thang log)",
+      col.names = c("Giả định", "Mô hình 1 (gốc)", "Log-OLS (log)")) |>
+  kable_styling(bootstrap_options = c("hover"), latex_options = c("HOLD_position", "scale_down"), font_size = 11)
+```
+
+Shapiro–Wilk trên `m_log` cho W = `r round(unname(shapiro_log$statistic), 3)`, p `r format.pval(shapiro_log$p.value, digits = 3, eps = 1e-16)`. So `r n_vipham_ols4`/4 giả định vi phạm ở Mô hình 1 với `r n_vipham_log4`/4 ở mô hình log: `r ifelse(n_vipham_log4 < n_vipham_ols4, "biến đổi log cải thiện số giả định BLUE vi phạm so với thang gốc — đúng như kỳ vọng khi xử lý biến mục tiêu lệch phải", ifelse(n_vipham_log4 == n_vipham_ols4, "biến đổi log KHÔNG làm giảm số giả định vi phạm — log có thể chưa phải mức biến đổi phù hợp nhất", "biến đổi log làm số giả định vi phạm tăng lên — cần diễn giải thận trọng"))`.
+
+```{r h-predict-log}
+pred_log <- exp(predict(m_log, newdata = test_df)) * smear_factor
+
+bang_log_vs_3 <- bind_rows(
+  compare_models("Log-OLS (smearing)", test_df$salary_in_usd, pred_log),
+  bang_so_sanh |> select(Model, RMSE, MAE, R2)
+) |> arrange(RMSE)
+
+rank_log <- which(bang_log_vs_3$Model == "Log-OLS (smearing)")
+
+bang_log_vs_3 |>
+  mutate(RMSE = fmt(RMSE), MAE = fmt(MAE), R2 = round(R2, 4)) |>
+  kbl(booktabs = TRUE, caption = "Mô hình log-OLS so với 4 mô hình đã có ở Phần Đánh giá và so sánh mô hình, trên cùng tập kiểm định") |>
+  kable_styling(bootstrap_options = c("hover"), latex_options = c("HOLD_position", "scale_down"), font_size = 11) |>
+  row_spec(1, background = "#e8f5e9")
+```
+
+Mô hình log-OLS xếp hạng `r rank_log`/`r nrow(bang_log_vs_3)` theo RMSE trên tập kiểm định — `r ifelse(rank_log == nrow(bang_log_vs_3), paste0("tệ nhất trong ", nrow(bang_log_vs_3), " mô hình đã xây dựng"), ifelse(rank_log == 1, paste0("tốt nhất trong ", nrow(bang_log_vs_3), " mô hình đã xây dựng"), paste0("đứng thứ ", rank_log, " trong ", nrow(bang_log_vs_3), " mô hình đã xây dựng")))`, dù đã cải thiện `r n_vipham_ols4 - n_vipham_log4` giả định BLUE bị vi phạm so với Mô hình 1 (giả định chuẩn phần dư `r ifelse(shapiro_log$p.value < 0.05, "vẫn" , "không còn")` bị bác bỏ). Tốt hơn về giả định phân phối **không đồng nghĩa** tốt hơn về độ chính xác dự đoán: quy đổi ngược từ log khuếch đại sai số ở nhóm lương cao. Câu hỏi mục kế tiếp: liệu log ($\lambda=0$) có phải mức biến đổi *đúng*, hay đã "biến đổi quá tay"?
+
+#### Tìm λ tối ưu bằng kiểm định Box–Cox chính thức
+
+**Mục tiêu.** Mục trên cho thấy biến đổi log — phép biến đổi Box–Cox ứng với $\lambda = 0$ — tuy cải thiện một phần giả định BLUE nhưng không cải thiện (thậm chí có thể làm xấu đi) RMSE trên thang gốc so với OLS không biến đổi. Mục này tổng quát hoá bằng kiểm định Box–Cox chính thức, tìm $\lambda$ tối ưu về log-likelihood thay vì chỉ thử hai lựa chọn cực đoan (không biến đổi $\lambda=1$ và log $\lambda=0$) như ở trên. Với mỗi giá trị $\lambda_0$ cần kiểm tra, cặp giả thuyết là:
+
+$H_0: \lambda = \lambda_0 \quad (\text{mức biến đổi Box–Cox đúng bằng } \lambda_0\text{; hai trường hợp quan tâm nhất: } \lambda_0=1 \text{ là không cần biến đổi, } \lambda_0=0 \text{ là log})$  
+$H_1: \lambda \neq \lambda_0 \quad (\text{mức biến đổi phù hợp khác } \lambda_0)$
+
+và khoảng tin cậy xấp xỉ 95% cho $\hat\lambda$ (dựa trên kiểm định tỷ số hợp lý — likelihood-ratio test, ngưỡng $\chi^2_{1, 0.95}$) chính là tập hợp mọi $\lambda_0$ **không bị bác bỏ**; hai trường hợp riêng quan tâm nhất là $\lambda_0 = 1$ (không cần biến đổi) và $\lambda_0 = 0$ (log) — nếu khoảng tin cậy không chứa một giá trị nào đó, $H_0$ tương ứng bị bác bỏ ở $\alpha = 0.05$:
+
+```{r h-boxcox, fig.height=3.2}
+bc <- MASS::boxcox(m_reduced, lambda = seq(-0.5, 1.5, 0.01), plotit = TRUE,
+                    xlab = expression(lambda), ylab = "Log-likelihood profile")
+
+lambda_hat <- bc$x[which.max(bc$y)]
+ll_max     <- max(bc$y)
+nguong_ci  <- ll_max - qchisq(0.95, 1) / 2
+lambda_ci  <- range(bc$x[bc$y >= nguong_ci])
+```
+
+$\hat\lambda \approx$ `r round(lambda_hat, 2)`, khoảng tin cậy 95% là [`r round(lambda_ci[1], 2)`; `r round(lambda_ci[2], 2)`] — không chứa cả $\lambda=1$ lẫn $\lambda=0$, nên cả hai $H_0$ (không biến đổi, hoặc log) đều **bác bỏ** ở $\alpha=0.05$. Box–Cox xác nhận cần biến đổi, nhưng mức phù hợp nhẹ hơn log toàn phần — gần một phép lũy thừa trung gian giữa căn bậc hai và log. Đây là lý do log "biến đổi quá tay", khớp với việc log làm RMSE thang gốc xấu đi.
+
+Để kiểm chứng bằng số liệu dự đoán thực tế (không chỉ log-likelihood lý thuyết), mô hình được ước lượng lại trên thang $\lambda \approx$ `r round(lambda_hat, 2)`, huấn luyện/kiểm định trên đúng `train_df`/`test_df` đã chia ở Phần Xây dựng mô hình dự đoán, và quy đổi ngược bằng phép hiệu chỉnh kiểu smearing tổng quát (trung bình hoá qua toàn bộ phần dư huấn luyện, tương tự cách hiệu chỉnh Duan đã dùng cho log ở mục trên, nhưng áp dụng cho hàm ngược Box–Cox thay vì $\exp(\cdot)$):
+
+```{r h-boxcox-predict}
+bc_transform <- function(y, lambda) if (abs(lambda) < 1e-8) log(y) else (y^lambda - 1) / lambda
+bc_inverse   <- function(y, lambda) if (abs(lambda) < 1e-8) exp(y) else pmax(y * lambda + 1, 1e-6)^(1/lambda)
+
+train_bc <- train_df |> mutate(y_bc = bc_transform(salary_in_usd, lambda_hat))
+m_boxcox <- lm(update(f_full, y_bc ~ . - salary_in_usd), data = train_bc)
+
+resid_bc     <- residuals(m_boxcox)
+pred_bc_raw  <- predict(m_boxcox, newdata = test_df)
+pred_boxcox  <- sapply(pred_bc_raw, function(mu) mean(bc_inverse(mu + resid_bc, lambda_hat)))
+
+bang_boxcox <- bind_rows(
+  compare_models(paste0("Box-Cox (lambda = ", round(lambda_hat,2), ")"), test_df$salary_in_usd, pred_boxcox),
+  compare_models("Log-OLS (smearing)", test_df$salary_in_usd, pred_log),
+  bang_so_sanh |> select(Model, RMSE, MAE, R2)
+) |> arrange(RMSE)
+
+bang_boxcox |>
+  mutate(RMSE = fmt(RMSE), MAE = fmt(MAE), R2 = round(R2, 4)) |>
+  kbl(booktabs = TRUE, caption = "Mô hình Box-Cox (lambda tối ưu) so với mô hình log-OLS (mục trên) và 4 mô hình đã có ở Phần Đánh giá và so sánh mô hình, trên cùng tập kiểm định") |>
+  kable_styling(bootstrap_options = c("hover"), latex_options = c("HOLD_position", "scale_down"), font_size = 11) |>
+  row_spec(which(bang_boxcox$Model == bang_boxcox$Model[1]), background = "#e8f5e9")
+```
+
+Mô hình Box–Cox với $\lambda$ tối ưu **vượt qua cả Ridge** (mô hình tốt nhất trước đó) lẫn log-OLS, ở cả ba chỉ số RMSE, MAE, R², dù chỉ dùng OLS thuần tuý trên thang đo đã biến đổi đúng mức. Phát hiện quan trọng nhất của Phần Cải tiến mô hình: **hướng cải tiến hiệu quả nhất không phải thuật toán phức tạp hơn (Ridge/LASSO), mà là biến đổi đúng thang đo biến mục tiêu trước khi hồi quy**. Khuyến nghị: **mô hình Box–Cox ($\lambda \approx$ `r round(lambda_hat, 2)`) nên là mô hình dự đoán được đề xuất**, thay thế Ridge.
+
+### Tổng hợp và khuyến nghị mở rộng
+
+**Mục tiêu.** Tổng hợp lại các phát hiện của bốn mục kiểm tra ở trên thành một bảng đối chiếu hạn chế – phân tích bổ sung, rồi nêu các hướng cải tiến cụ thể còn lại.
+
+```{r h-summary-table}
+data.frame(
+  Hạn_chế_phát_hiện = c(
+    "Phần dư vi phạm chuẩn (Shapiro-Wilk p < 0.001, xác nhận lại ở đầu Phần Cải tiến mô hình); log toàn phần không cải thiện RMSE (mục Biến đổi mục tiêu ở trên)",
+    "Hệ số employment_typeContract không ổn định — do cỡ mẫu quá nhỏ (n=5)",
+    "R² tối đa ~0.48–0.49 dù đã thử 5 mô hình khác nhau",
+    "work_year mất ý nghĩa sau kiểm soát — xu hướng thời gian thô lẫn với thay đổi cơ cấu mẫu",
+    "LASSO chỉ co từng dummy riêng lẻ, không loại nguyên khối remote_ratio dù cả khối không có ý nghĩa"
+  ),
+  Phân_tích_bổ_sung_đã_thực_hiện = c(
+    "Thử log-OLS (lambda=0) rồi kiểm định Box–Cox chính thức → lambda tối ưu ≈ 0.4, cải thiện RMSE hơn cả log-OLS lẫn 4 mô hình ở Phần Đánh giá và so sánh mô hình",
+    "Hồi quy vững (MM) + phân tích độ nhạy (loại top-5 Cook's D) — cả hai độc lập xác nhận",
+    "Effect size (partial eta-squared) định lượng: chỉ experience_level, company_region đạt mức \"lớn\"",
+    "Partial F-test lý thuyết + kiểm định hoán vị (cả hai ở mục Kiểm định hoán vị, Phần Cải tiến mô hình) cho cùng kết luận, không phụ thuộc giả định chuẩn",
+    "Đã ghi nhận như hạn chế kỹ thuật của LASSO thường; grouped LASSO là hướng mở rộng"
+  ),
+  row.names = NULL
+) |>
+  kbl(booktabs = TRUE, caption = "Tổng hợp hạn chế phát hiện được và các phân tích bổ sung đã thực hiện ở Phần Cải tiến mô hình") |>
+  kable_styling(bootstrap_options = c("hover"), latex_options = c("HOLD_position"), font_size = 11) |>
+  column_spec(1, width = "7cm") |>
+  column_spec(2, width = "7cm")
+```
+
+Các phân tích bổ sung đều **xác nhận lại**, chứ không đảo ngược, kết luận chính: `experience_level`, `job_category`, `company_region` là ba yếu tố ảnh hưởng thực sự và ổn định. Điểm mới phát hiện thêm: (i) hệ số `employment_type = Contract` không đáng tin cậy do cỡ mẫu quá nhỏ, và (ii) biến đổi Box–Cox đúng $\lambda$ là hướng cải tiến dự đoán hiệu quả chưa được khai thác trước đó.
+
+Ngoài các phân tích thực hiện được trực tiếp trên bộ dữ liệu hiện có, một số hướng cải thiện sau đòi hỏi thêm dữ liệu hoặc vượt phạm vi báo cáo này:
+
+- **Thu thập thêm dữ liệu cho các nhóm nhỏ**: `employment_type` (PartTime/Contract/Freelance) và `job_category = Other` có cỡ mẫu dưới 20 — hệ số các nhóm này (đặc biệt Contract, đã xác nhận không ổn định) sẽ đáng tin cậy hơn với cỡ mẫu lớn hơn, thay vì phải dựa vào robust regression để "vá" vấn đề.
+- **Biến bị bỏ sót**: R² tối đa (~0.49, Box–Cox) cho thấy hơn một nửa biến động lương chưa được giải thích — có thể do kỹ năng chuyên môn cụ thể, tên công ty, hiệu suất cá nhân, hay kỹ năng thương lượng, không có trong dữ liệu gốc.
+- **Grouped LASSO hoặc group SCAD**: chọn biến theo *cả khối* nhân tố phân loại (loại nguyên `remote_ratio` nếu không có ý nghĩa) thay vì từng dummy riêng lẻ như LASSO thường.
+- **Hồi quy phân vị**: dữ liệu có đuôi lương cao dài và phương sai không đồng nhất theo `experience_level` — hồi quy phân vị mô tả cách các yếu tố ảnh hưởng khác nhau ở từng phân vị lương (ví dụ `company_region` ảnh hưởng mạnh hơn ở nhóm lương cao hay thấp), thay vì chỉ một hiệu ứng trung bình.
+- **Dữ liệu nhiều năm hơn**: chỉ 3 năm (2020–2022) khiến `work_year` và cơ cấu mẫu thay đổi đồng thời, không tách bạch được xu hướng thời gian thuần túy khỏi thay đổi thành phần mẫu; dữ liệu trải dài hơn (5–10 năm) sẽ cho kiểm định đáng tin cậy hơn.

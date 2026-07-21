@@ -81,7 +81,7 @@ Không có dữ liệu khuyết trong bộ dữ liệu này.
 
 ## Kiểm tra và xử lý dữ liệu trùng
 
-```{r duplicate-check}
+```{r p3-duplicate-check}
 # Kiểm tra dòng trùng hoàn toàn, không xét biến chỉ số instant
 duplicate_index <- duplicated(bike %>% select(-instant))
 duplicated_rows <- sum(duplicate_index)
@@ -251,7 +251,7 @@ Ma trận tương quan cho thấy phần lớn các cặp biến giải thích c
 
 ### Kiểm tra VIF
 
-```{r vif-check}
+```{r p3-vif-check}
 vif_model <- lm(
   cnt ~ yr + mnth + hr + workingday + weekday +
     weathersit + temp + atemp + hum + windspeed,
