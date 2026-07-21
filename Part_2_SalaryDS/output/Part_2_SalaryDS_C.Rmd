@@ -1,49 +1,62 @@
-## Lựa chọn và giải thích các phương pháp phân tích thống kê
+# Lựa chọn và giải thích các phương pháp phân tích thống kê với từng bài toán
 
-### Phân tích các yếu tố ảnh hưởng đến mức lương
+## Phân tích các yếu tố ảnh hưởng đến mức lương
 
-**Hồi quy tuyến tính đa biến được lựa chọn làm phương pháp phân tích chính.** Mức lương của người lao động có thể đồng thời liên quan đến `work_year`, `experience_level`, `employment_type`, `company_size`, `remote_ratio`, `job_category`, `company_region`, `cross_border`. Hồi quy đa biến cho phép ước lượng mối liên hệ riêng của từng yếu tố với mức lương trong điều kiện các yếu tố còn lại được giữ không đổi, nhờ đó khắc phục hạn chế của việc chỉ so sánh riêng lẻ từng nhóm.
+**Hồi quy tuyến tính đa biến được lựa chọn làm phương pháp phân tích chính.** Mức lương của người lao động có thể đồng thời liên quan đến `work_year`, `experience_level`, `employment_type` `company_size` , `remote_ratio` , `job_category`, `company_region` , `cross_border`. Hồi quy đa biến cho phép ước lượng mối liên hệ riêng của từng yếu tố với mức lương trong điều kiện các yếu tố còn lại được giữ không đổi, nhờ đó khắc phục hạn chế của việc chỉ so sánh riêng lẻ từng nhóm.
 
 Phân tích sử dụng tập dữ liệu `salary_model` sau tiền xử lý. Các chức danh đã được gom thành năm nhóm thông qua `job_category`; quốc gia đặt trụ sở công ty được gom thành ba nhóm thông qua `company_region`; biến `cross_border` được tạo để phản ánh trường hợp người lao động cư trú khác quốc gia với công ty. Các biến `salary`, `salary_currency`, `job_title`, `employee_residence` và `company_location` không được đưa trực tiếp vào mô hình vì đã được loại bỏ hoặc thay thế bằng các biến có khả năng diễn giải tốt hơn.
 
 Mô hình hồi quy tuyến tính đa biến tổng quát được đề xuất như sau:
 
-$$
-\begin{aligned}
-g(\text{salary\_in\_usd}) ={}& \beta_0 + \beta_1\,\text{work\_year} + \boldsymbol{\beta}_2^{\mathsf T}\text{experience\_level} \\
-&+ \boldsymbol{\beta}_3^{\mathsf T}\text{employment\_type} + \boldsymbol{\beta}_4^{\mathsf T}\text{company\_size} \\
-&+ \boldsymbol{\beta}_5^{\mathsf T}\text{remote\_ratio} + \boldsymbol{\beta}_6^{\mathsf T}\text{job\_category} \\
-&+ \boldsymbol{\beta}_7^{\mathsf T}\text{company\_region} + \beta_8\,\text{cross\_border} + \varepsilon,
-\end{aligned}
-$$
+\$\$
 
-trong đó $g(\cdot)$ là phép biến đổi phù hợp của biến mức lương và $\varepsilon$ là sai số ngẫu nhiên của mô hình.
+\begin{aligned}
+g(\text{salary_in_usd})
+={}& \beta_0
+
+* \beta_1\text{work_year}
+* \boldsymbol{\beta}_2^{\mathsf T}\text{experience_level} \
+  &+ \boldsymbol{\beta}_3^{\mathsf T}\text{employment_type}
+* \boldsymbol{\beta}_4^{\mathsf T}\text{company_size} \
+  &+ \boldsymbol{\beta}_5^{\mathsf T}\text{remote_ratio}
+* \boldsymbol{\beta}_6^{\mathsf T}\text{job_category} \
+  &+ \boldsymbol{\beta}_7^{\mathsf T}\text{company_region}
+* \beta_8\text{cross_border}
+* \varepsilon,
+  \end{aligned}
+
+l{\beta}\_7\^{\mathsf T}\text{company_region} \* \beta\_8\text{cross_border} \* \varepsilon, \\end{aligned}
+
+l{\beta}\_7\^{\mathsf T}\text{company_region} \* \beta\_8\text{cross_border} \* \varepsilon, \\end{aligned} \$\$
+
+trong đó (g(\cdot)) là phép biến đổi phù hợp của biến mức lương và (\varepsilon) là sai số ngẫu nhiên của mô hình.
 
 **Phép biến đổi của biến phản hồi sẽ được lựa chọn dựa trên EDA.** Kết quả EDA cho thấy `salary_in_usd` có phân phối lệch phải và xuất hiện một số mức lương lớn, vì vậy mô hình trên thang đo gốc có nguy cơ xuất hiện phần dư lệch hoặc phương sai không đồng nhất. Tuy nhiên, phân phối lệch của biến lương không đồng nghĩa trực tiếp với phần dư chắc chắn vi phạm giả định; các giả định cần được kiểm tra sau khi mô hình ban đầu được ước lượng.
 
-**Phương pháp Box–Cox được đề xuất để lựa chọn phép biến đổi biến phản hồi một cách có hệ thống.** Với $Y = \text{salary\_in\_usd} > 0$, phép biến đổi Box–Cox có dạng:
+**Phương pháp Box–Cox được đề xuất để lựa chọn phép biến đổi biến phản hồi một cách có hệ thống.** Với (Y=\text{salary_in_usd}\>0), phép biến đổi Box–Cox có dạng:
 
-$$
-Y^{(\lambda)} =
+\$\$ Y\^{(\lambda)} =============
+
 \begin{cases}
-\dfrac{Y^\lambda - 1}{\lambda}, & \lambda \ne 0, \\[2mm]
-\log(Y), & \lambda = 0.
+\dfrac{Y^\lambda-1}{\lambda}, & \lambda\ne0, [2mm]
+\log(Y), & \lambda=0.
 \end{cases}
-$$
 
-Nếu giá trị $\lambda$ tối ưu gần 1, mô hình có thể giữ mức lương trên thang đo gốc; nếu $\lambda$ gần 0, phép biến đổi logarit là phù hợp; nếu $\lambda$ nhận giá trị khác, có thể sử dụng phép biến đổi lũy thừa tương ứng. Quyết định cuối cùng được đưa ra dựa trên khoảng tin cậy của $\lambda$, QQ-plot phần dư và biểu đồ phần dư theo giá trị dự báo.
+\$\$
 
-**Mô hình OLS được sử dụng làm mô hình cơ sở vì có khả năng diễn giải trực tiếp.** Các hệ số của biến phân loại cho biết mức chênh lệch lương so với nhóm tham chiếu sau khi đã kiểm soát các yếu tố khác. Nếu sử dụng mô hình log-lương, hệ số $\beta$ có thể được chuyển thành phần trăm chênh lệch gần đúng theo công thức:
+Nếu giá trị (\lambda) tối ưu gần 1, mô hình có thể giữ mức lương trên thang đo gốc; nếu (\lambda) gần 0, phép biến đổi logarit là phù hợp; nếu (\lambda) nhận giá trị khác, có thể sử dụng phép biến đổi lũy thừa tương ứng. Quyết định cuối cùng được đưa ra dựa trên khoảng tin cậy của (\lambda), QQ-plot phần dư và biểu đồ phần dư theo giá trị dự báo.
 
-$$100\left(e^\beta - 1\right)\%.$$
+**Mô hình OLS được sử dụng làm mô hình cơ sở vì có khả năng diễn giải trực tiếp.** Các hệ số của biến phân loại cho biết mức chênh lệch lương so với nhóm tham chiếu sau khi đã kiểm soát các yếu tố khác. Nếu sử dụng mô hình log-lương, hệ số (\beta) có thể được chuyển thành phần trăm chênh lệch gần đúng theo công thức:
+
+$$100\left(e^\beta-1\right)%.$$
 
 Ví dụ, hệ số của nhóm Senior phản ánh mức chênh lệch lương giữa Senior và Entry sau khi đã điều chỉnh nhóm nghề nghiệp, khu vực, quy mô công ty và các đặc điểm còn lại.
 
-**Ridge hoặc LASSO được đề xuất làm các mô hình bổ sung ở bước xây dựng mô hình dự đoán.** Sau khi mã hóa các biến phân loại, mô hình có nhiều biến giả và một số biến có thể mang thông tin liên quan với nhau. Ridge sử dụng chuẩn hóa $L_2$ để thu nhỏ hệ số và cải thiện độ ổn định của dự báo, trong khi LASSO sử dụng chuẩn hóa $L_1$, vừa thu nhỏ hệ số vừa có khả năng đưa một số hệ số về 0 để thực hiện lựa chọn biến. Vì vậy, ở câu (e), nhóm có thể xây dựng OLS cùng với Ridge và LASSO, sau đó so sánh khả năng dự báo trên tập kiểm định.
+**Ridge hoặc LASSO được đề xuất làm các mô hình bổ sung ở bước xây dựng mô hình dự đoán.** Sau khi mã hóa các biến phân loại, mô hình có nhiều biến giả và một số biến có thể mang thông tin liên quan với nhau. Ridge sử dụng chuẩn hóa (L_2) để thu nhỏ hệ số và cải thiện độ ổn định của dự báo, trong khi LASSO sử dụng chuẩn hóa (L_1), vừa thu nhỏ hệ số vừa có khả năng đưa một số hệ số về 0 để thực hiện lựa chọn biến. Vì vậy, ở câu (e), nhóm có thể xây dựng OLS cùng với Ridge và LASSO, sau đó so sánh khả năng dự báo trên tập kiểm định.
 
 **Phân tích phương sai nhiều yếu tố (factorial ANOVA)** có thể được sử dụng để đánh giá đồng thời sự khác biệt mức lương theo kinh nghiệm, nhóm nghề nghiệp, hình thức làm việc, quy mô công ty, mức độ làm việc từ xa và khu vực địa lý. Phương pháp này phù hợp vì phần lớn biến giải thích là biến phân loại. ANOVA giúp kiểm định ảnh hưởng tổng thể của từng yếu tố, còn các hệ số hồi quy trong cùng khuôn khổ mô hình tuyến tính hỗ trợ xác định chiều hướng và mức chênh lệch giữa từng nhóm so với nhóm tham chiếu. Do dữ liệu mang tính quan sát, kết quả chỉ phản ánh mối liên hệ thống kê, không khẳng định quan hệ nhân quả.
 
-### So sánh mức lương giữa các nhóm
+## So sánh mức lương giữa các nhóm
 
 Để so sánh mức lương giữa các nhóm nghề nghiệp, mức kinh nghiệm, quy mô công ty, hình thức làm việc và khu vực địa lý, phương pháp lựa chọn là **Welch ANOVA**. Phương pháp này dùng để kiểm tra xem mức lương trung bình giữa nhiều nhóm có giống nhau hay không. Ví dụ, có thể kiểm tra mức lương giữa các nhóm Data Analyst, Data Engineer, Data Scientist và ML Engineer có khác biệt đáng kể hay không.
 
@@ -53,7 +66,7 @@ Nếu Welch ANOVA cho kết quả có ý nghĩa thống kê, điều đó chỉ 
 
 Trong trường hợp phân phối mức lương vẫn lệch mạnh hoặc không đáp ứng tốt các giả định của phương pháp tham số, kiểm định **Kruskal–Wallis** có thể được sử dụng thay thế. Đây là phương pháp phi tham số, phù hợp hơn khi dữ liệu không có phân phối gần chuẩn hoặc bị ảnh hưởng bởi các giá trị cực đoan.
 
-### Phân tích xu hướng thay đổi mức lương theo thời gian
+## iii. Phân tích xu hướng thay đổi mức lương theo thời gian
 
 Để phân tích xu hướng thay đổi mức lương theo thời gian, có thể lựa chọn **mô hình hồi quy tuyến tính với biến `work_year`**. Biến này nhận các giá trị 2020, 2021 và 2022, có thứ tự thời gian rõ ràng nên hệ số của `work_year` có thể cho biết mức lương trung bình có xu hướng tăng hay giảm qua mỗi năm. Chẳng hạn, hệ số dương và có ý nghĩa thống kê cho thấy mức lương có xu hướng tăng theo thời gian, trong khi hệ số âm cho thấy xu hướng giảm.
 
