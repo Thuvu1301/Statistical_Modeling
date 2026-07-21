@@ -1,13 +1,393 @@
-<!--
-## Chia tập huấn luyện / kiểm định
+## Chia dữ liệu và xây dựng mô hình dự đoán
 
-```{r p2-split}
+Phần này chia dữ liệu thành tập huấn luyện/kiểm định, rồi xây dựng bốn mô hình hồi quy — OLS, OLS rút gọn bằng stepwise AIC, Ridge và LASSO — để dự đoán `salary_in_usd`, đều ước lượng trên tập huấn luyện. Đánh giá khách quan trên tập kiểm định, biến đổi thang đo mục tiêu (log, Box–Cox), và các kiểm định so sánh nhóm (Welch ANOVA, Games–Howell, ANOVA nhiều nhân tố) được trình bày ở các phần sau.
+
+```{r de-packages}
+if (!requireNamespace("glmnet", quietly = TRUE)) install.packages("glmnet")
+if (!requireNamespace("lmtest", quietly = TRUE)) install.packages("lmtest")
+library(glmnet)
+library(lmtest)
 ```
 
-## Xây dựng mô hình dự đoán lương
+### Chia tập huấn luyện / kiểm định
 
-*(TODO: xây dựng ít nhất 2 mô hình hồi quy, vd OLS + Ridge/LASSO/PCR.)*
+#### Chia dữ liệu
+Tập dữ liệu được chia theo tỷ lệ **80/20** bằng `caret::createDataPartition()`, phân tầng theo phân vị của chính biến mục tiêu `salary_in_usd` — cách chia này giữ cho phân phối lương ở hai tập tương đồng, đặc biệt quan trọng khi biến mục tiêu lệch phải.
 
-```{r p2-model}
+```{r de-split}
+predictors_all <- c("work_year", "experience_level", "employment_type", "company_size",
+                     "remote_ratio", "job_category", "company_region", "cross_border")
+
+model_data <- salary_model |> select(salary_in_usd, all_of(predictors_all))
+
+set.seed(2026)
+idx_train <- caret::createDataPartition(model_data$salary_in_usd, p = 0.8, list = FALSE)
+train_df  <- model_data[idx_train, ]
+test_df   <- model_data[-idx_train, ]
+
+cat(sprintf("Tập huấn luyện: %d quan sát (%.1f%%)\n", nrow(train_df), nrow(train_df)/nrow(model_data)*100))
+cat(sprintf("Tập kiểm định : %d quan sát (%.1f%%)\n", nrow(test_df), nrow(test_df)/nrow(model_data)*100))
 ```
--->
+
+```{r de-split-balance}
+data.frame(
+  Tập      = c("Huấn luyện", "Kiểm định"),
+  n        = c(nrow(train_df), nrow(test_df)),
+  Mean     = c(fmt(mean(train_df$salary_in_usd)), fmt(mean(test_df$salary_in_usd))),
+  Median   = c(fmt(median(train_df$salary_in_usd)), fmt(median(test_df$salary_in_usd))),
+  SD       = c(fmt(sd(train_df$salary_in_usd)), fmt(sd(test_df$salary_in_usd)))
+) |>
+  kbl(booktabs = TRUE, caption = "Đối chiếu phân phối salary_in_usd giữa tập huấn luyện và kiểm định") |>
+  kable_styling(bootstrap_options = c("hover"), latex_options = c("HOLD_position", "scale_down"), font_size = 11)
+```
+
+```{r de-split-levels-check}
+n_muc_thieu_train <- sum(sapply(c("experience_level", "employment_type", "company_size",
+                                    "remote_ratio", "job_category", "company_region"),
+                                 function(v) sum(table(train_df[[v]]) == 0)))
+```
+
+Trung bình, trung vị và độ lệch chuẩn của `salary_in_usd` giữa hai tập rất gần nhau, xác nhận phép phân tầng hoạt động tốt. Kiểm tra độ phủ các mức biến phân loại: có `r n_muc_thieu_train` mức vắng mặt ở **tập huấn luyện** — điều kiện cần để mọi hệ số dummy đều ước lượng được. Riêng `employment_type = Freelance` (chỉ 4 quan sát toàn mẫu) vắng mặt ở tập **kiểm định** của lần chia này — hệ quả không tránh khỏi của cỡ mẫu quá nhỏ; độ chính xác dự đoán cho nhóm này vì vậy không được kiểm chứng trực tiếp, và cần ghi nhận như một hạn chế khi so sánh mô hình.
+
+#### Kiểm tra tỷ lệ chia và phân bố dữ liệu
+
+Việc kiểm tra lại tỷ lệ chia tập huấn luyện/kiểm định và phân bố biến mục tiêu là bước quan trọng để đảm bảo rằng các mô hình dự đoán được huấn luyện trên một tập đại diện cho toàn bộ dữ liệu, và rằng các đánh giá hiệu năng trên tập kiểm định là hợp lý.
+
+**1. Phân phối biến mục tiêu — kiểm định Kolmogorov–Smirnov hai mẫu.** Đây là kiểm định phi tham số, không giả định dạng phân phối cụ thể — phù hợp vì `salary_in_usd` lệch phải (phần EDA).
+
+$H_0: \texttt{salary\_in\_usd} \text{ ở tập huấn luyện và tập kiểm định có cùng phân phối } (\text{phép chia không làm lệch phân phối lương giữa hai tập})$  
+$H_1: \text{hai phân phối khác nhau } (\text{phân phối lương giữa hai tập lệch nhau đáng kể dù đã phân tầng theo phân vị của } \texttt{salary\_in\_usd})$
+
+```{r de-split-test-ks}
+ks_split <- suppressWarnings(ks.test(train_df$salary_in_usd, test_df$salary_in_usd))
+```
+
+Kết quả kiểm định: D = `r round(unname(ks_split$statistic), 3)`, p `r format.pval(ks_split$p.value, digits = 3, eps = 1e-16)` — `r ifelse(ks_split$p.value < 0.05, "bác bỏ H0, cho thấy phân phối salary_in_usd giữa hai tập khác biệt có ý nghĩa dù đã phân tầng theo phân vị của chính biến này — cần diễn giải kết quả trên tập kiểm định thận trọng hơn", "không đủ bằng chứng bác bỏ H0, xác nhận phân phối salary_in_usd giữa hai tập tương đồng, đúng như kỳ vọng khi phân tầng theo phân vị của chính biến mục tiêu")`.
+
+**2. Tỷ lệ các mức của từng biến phân loại — kiểm định Chi-square về tính đồng nhất.** Phép chia chỉ phân tầng theo phân vị của `salary_in_usd` (mục trên), nên đây là kiểm định độc lập xem việc phân tầng đó có "vô tình" kéo theo cân bằng tốt ở các biến phân loại hay không.
+
+$H_0: \text{tỷ lệ các mức của biến phân loại giống nhau giữa tập huấn luyện và tập kiểm định } (\text{cơ cấu các nhóm, vd tỷ lệ Entry/Mid/Senior/Exec, không lệch nhau giữa hai tập})$  
+$H_1: \text{tỷ lệ các mức khác nhau giữa hai tập } (\text{có ít nhất một mức xuất hiện với tỷ lệ khác biệt đáng kể giữa hai tập})$
+
+```{r de-split-test-chisq}
+kiem_dinh_ty_le <- function(v) {
+  bang <- table(
+    Tap = rep(c("Train", "Test"), times = c(nrow(train_df), nrow(test_df))),
+    Muc = c(as.character(train_df[[v]]), as.character(test_df[[v]]))
+  )
+  kq <- suppressWarnings(chisq.test(bang))
+  data.frame(Bien = v, Thong_ke = round(unname(kq$statistic), 2),
+             df = unname(kq$parameter), p_value = round(kq$p.value, 4))
+}
+
+bang_ty_le <- bind_rows(lapply(
+  c("experience_level", "employment_type", "company_size",
+    "remote_ratio", "job_category", "company_region"),
+  kiem_dinh_ty_le
+))
+n_ty_le_vipham <- sum(bang_ty_le$p_value < 0.05)
+
+bang_ty_le |>
+  kbl(booktabs = TRUE, caption = "Kiểm định Chi-square về tính đồng nhất tỷ lệ các mức giữa tập huấn luyện và tập kiểm định (H0: tỷ lệ giống nhau)",
+      col.names = c("Biến", "Chi-square", "df", "p-value")) |>
+  kable_styling(bootstrap_options = c("hover"), latex_options = c("HOLD_position", "scale_down"), font_size = 11)
+```
+
+Kết quả kiểm định: `r n_ty_le_vipham`/`r nrow(bang_ty_le)` biến có p < 0.05 — `r ifelse(n_ty_le_vipham == 0, "không biến nào khác biệt đáng kể giữa hai tập — việc chia ngẫu nhiên theo phân vị salary_in_usd không gây mất cân bằng cơ cấu ở các biến phân loại còn lại", "một vài biến khác biệt đáng kể giữa hai tập — cần lưu ý khi diễn giải hiệu năng dự đoán cho các nhóm liên quan, vì phân tầng chỉ theo phân vị salary_in_usd")`. Lưu ý: với các nhóm cỡ mẫu rất nhỏ (`employment_type = Freelance`, `Contract`), xấp xỉ Chi-square có thể kém tin cậy do một số ô kỳ vọng dưới 5 quan sát (Cochran 1954) — kết quả cho `employment_type` vì vậy mang tính tham khảo hơn là kết luận chắc chắn.
+
+### Xây dựng mô hình dự đoán
+
+Mô hình 1 (OLS), 3 (Ridge) và 4 (LASSO) đều dùng **cùng tập biến đầy đủ** (8 khối biến, gồm cả `work_year`, `remote_ratio`) thay vì loại trước biến "có vẻ" không quan trọng — LASSO tự co hệ số về 0 nên kết quả co biến của nó sẽ là một bằng chứng để xác định biến quan trọng ở Phần Đánh giá mô hình. Riêng Mô hình 2 chọn biến bằng stepwise AIC, cho góc nhìn đối chiếu khác.
+
+```{r de-formula}
+f_full <- as.formula(paste("salary_in_usd ~", paste(predictors_all, collapse = " + ")))
+```
+
+#### Mô hình 1 — Hồi quy tuyến tính bội (OLS)
+
+**Mục tiêu.** Xây dựng mô hình dự đoán lương đầu tiên, đồng thời — vì OLS là mô hình dễ diễn giải nhất — đóng vai trò công cụ chính để xác định *yếu tố nào ảnh hưởng đến lương, theo chiều nào, và với độ lớn (USD) cụ thể là bao nhiêu, khi các yếu tố khác được giữ cố định?* Mô hình này cũng là đường cơ sở (baseline) để đối chiếu hiệu năng dự đoán với Mô hình 2–4, và với biến thể biến đổi mục tiêu được khám phá thêm ở Phần Cải tiến mô hình. Bảng kết quả `summary()` bên dưới thực chất chứa hai tầng kiểm định giả thuyết khác nhau:
+
+**Kiểm định t — cho từng hệ số $\beta_j$ riêng lẻ:**
+
+$H_0: \beta_j = 0 \quad (\text{biến dự báo thứ } j \text{ không liên hệ với } \texttt{salary\_in\_usd}\text{, khi các biến khác giữ cố định})$  
+$H_1: \beta_j \neq 0 \quad (\text{biến dự báo thứ } j \text{ có liên hệ thực sự với } \texttt{salary\_in\_usd})$
+
+**Kiểm định F — cho toàn bộ mô hình:**
+
+$H_0: \beta_1 = \beta_2 = \dots = \beta_p = 0 \quad (\text{không biến dự báo nào liên hệ với } \texttt{salary\_in\_usd}\text{; mô hình không tốt hơn dự đoán bằng trung bình chung})$  
+$H_1: \text{tồn tại ít nhất một } \beta_j \neq 0 \quad (\text{mô hình có giá trị giải thích})$
+
+Mô hình cơ sở có dạng:
+
+$$\text{salary\_in\_usd} = \beta_0 + \beta_1\,\text{work\_year} + \boldsymbol\beta_2^{\top}\text{experience\_level} + \dots + \beta_8\,\text{cross\_border} + \varepsilon,$$
+
+trong đó các biến phân loại được mã hoá thành biến giả với mức tham chiếu đã chọn ở phần tiền xử lý (Entry, FullTime, Small, Onsite, Data Analyst, Northern_America, cross_border = 0). Mô hình được ước lượng bằng phương pháp bình phương tối thiểu trên tập huấn luyện; kết quả `summary()` đầy đủ:
+
+```{r de-model-ols}
+m_ols <- lm(f_full, data = train_df)
+summary(m_ols)
+```
+
+```{r de-ols-stats}
+s_ols     <- summary(m_ols)
+f_stat    <- s_ols$fstatistic
+p_f_ols   <- pf(f_stat[1], f_stat[2], f_stat[3], lower.tail = FALSE)
+ols_tidy  <- broom::tidy(m_ols)
+
+he_so_senior <- ols_tidy$estimate[ols_tidy$term == "experience_levelSenior"]
+he_so_exec   <- ols_tidy$estimate[ols_tidy$term == "experience_levelExec"]
+he_so_eu     <- ols_tidy$estimate[ols_tidy$term == "company_regionEurope"]
+he_so_row    <- ols_tidy$estimate[ols_tidy$term == "company_regionRest_of_World"]
+he_so_ds     <- ols_tidy$estimate[ols_tidy$term == "job_categoryData Scientist"]
+he_so_mle    <- ols_tidy$estimate[ols_tidy$term == "job_categoryML Engineer"]
+he_so_cb     <- ols_tidy$estimate[ols_tidy$term == "cross_border"]
+he_so_year   <- ols_tidy$estimate[ols_tidy$term == "work_year"]
+```
+
+Bảng kết quả trên được đọc theo bốn tầng, từ chi tiết đến tổng thể:
+
+**(1) Bảng hệ số (Coefficients).** Cột `Estimate` là ước lượng $\hat\beta$ — với biến giả, đây là **chênh lệch lương trung bình (USD) so với nhóm tham chiếu, khi giữ mọi biến khác cố định**. Cột `Std. Error` đo độ bất định của ước lượng đó; cột `t value` $= \hat\beta / se(\hat\beta)$ là thống kê kiểm định cho giả thuyết $H_0: \beta = 0$; và `Pr(>|t|)` là p-value tương ứng — xác suất quan sát được một giá trị t cực đoan như vậy nếu biến đó thực sự không có hiệu ứng. Các dấu sao bên phải đánh dấu mức ý nghĩa (`***` cho p < 0.001).
+
+Đọc các hệ số nổi bật: một nhân sự **Senior** được trả trung bình cao hơn Entry `r fmt(he_so_senior)`/năm và **Exec** cao hơn tới `r fmt(he_so_exec)`, trong điều kiện cùng chức danh, quy mô công ty và khu vực. Ở chiều ngược lại, công ty đặt tại **Europe** trả thấp hơn Bắc Mỹ `r fmt(abs(he_so_eu))` và **Rest_of_World** thấp hơn `r fmt(abs(he_so_row))` — hai hệ số có trị tuyệt đối lớn nhất mô hình. Về chức danh, **Data Scientist** và **ML Engineer** cao hơn Data Analyst lần lượt `r fmt(he_so_ds)` và `r fmt(he_so_mle)`. Biến `cross_border` mang dấu âm và có ý nghĩa (`r fmt(he_so_cb)`): người làm việc khác quốc gia với công ty nhận lương thấp hơn, sau khi đã kiểm soát khu vực công ty. Ngược lại, `work_year` không có ý nghĩa (p > 0.3) — một kết luận sẽ được **kiểm chứng độc lập bằng ANOVA Type II** ở Phần Đánh giá và so sánh mô hình, mục Diễn giải ý nghĩa các biến quan trọng.
+
+**(2) Sai số chuẩn phần dư (Residual standard error).** RSE $\approx$ `r fmt(s_ols$sigma)` trên `r s_ols$df[2]` bậc tự do: độ lệch điển hình giữa lương thực tế và lương mô hình dự đoán, ngay trên tập huấn luyện, vào khoảng \$50,000/năm — một con số đáng kể so với trung vị lương ~\$100,000, báo trước rằng khả năng dự đoán cho từng cá nhân là có giới hạn.
+
+**(3) Hệ số xác định.** $R^2 =$ `r round(s_ols$r.squared, 3)`: tám khối biến giải thích được khoảng `r round(s_ols$r.squared*100, 1)`% phương sai của lương trong tập huấn luyện. $R^2$ hiệu chỉnh $=$ `r round(s_ols$adj.r.squared, 3)` — thấp hơn một chút vì đã phạt số lượng tham số (`r nrow(ols_tidy) - 1` hệ số góc); khoảng cách nhỏ giữa hai giá trị cho thấy mô hình không "lạm phát" $R^2$ bằng cách nhồi biến.
+
+**(4) F-test tổng thể.** Dòng cuối kiểm định $H_0$: *toàn bộ* hệ số góc đồng thời bằng 0 (mô hình không tốt hơn việc dự đoán bằng trung bình chung). F $=$ `r round(f_stat[1], 2)` trên (`r f_stat[2]`, `r f_stat[3]`) bậc tự do, p `r format.pval(p_f_ols, digits = 3, eps = 1e-16)` — bác bỏ $H_0$ một cách dứt khoát: mô hình có giá trị giải thích thực sự, dù còn xa mức hoàn hảo.
+
+**Kiểm tra đa cộng tuyến (VIF).** Hệ số của mô hình chỉ đáng tin khi các biến dự báo không tương quan quá mạnh với nhau:
+
+```{r de-vif}
+vif_ols <- car::vif(m_ols)
+data.frame(
+  Biến     = rownames(vif_ols),
+  GVIF_adj = round(vif_ols[, "GVIF^(1/(2*Df))"], 3),
+  row.names = NULL
+) |>
+  kbl(booktabs = TRUE, caption = "Chỉ số đa cộng tuyến GVIF chuẩn hoá của mô hình OLS trên tập huấn luyện") |>
+  kable_styling(bootstrap_options = c("hover"), latex_options = c("HOLD_position", "scale_down"), font_size = 11)
+
+vif_max <- max(vif_ols[, "GVIF^(1/(2*Df))"])
+```
+
+Giá trị lớn nhất chỉ `r round(vif_max, 2)`, xa dưới ngưỡng cảnh báo $\sqrt5 \approx 2.24$ — đa cộng tuyến không nghiêm trọng, các hệ số OLS ổn định và diễn giải được. Vai trò của Ridge/LASSO ở đây vì vậy không phải xử lý đa cộng tuyến, mà là **ổn định hoá hệ số của các nhóm cỡ mẫu nhỏ** (`Freelance`, `Contract`, `Other`).
+
+#### Kiểm định các giả định BLUE (Gauss–Markov) của mô hình OLS
+
+**Mục tiêu.** Hệ số OLS ở Mô hình 1 chỉ là ước lượng tuyến tính không chệch tốt nhất (**B**est **L**inear **U**nbiased **E**stimator — BLUE, định lý Gauss–Markov) — và các kiểm định t/F cùng khoảng tin cậy vừa diễn giải ở trên chỉ đáng tin — khi các giả định cổ điển của mô hình hồi quy tuyến tính được thỏa. Mục này kiểm định formal **năm giả định**: bốn giả định Gauss–Markov (tuyến tính đúng dạng, phương sai sai số đồng nhất, sai số không tự tương quan, không đa cộng tuyến hoàn hảo) cộng thêm giả định phân phối chuẩn của phần dư — không bắt buộc cho tính BLUE nhưng cần thiết để các kiểm định t/F ở trên chính xác ở cỡ mẫu hữu hạn (thay vì chỉ đúng tiệm cận). Đây là căn cứ thống kê trực tiếp cho quyết định chuyển sang hồi quy có phạt (Mô hình 3–4, đọc kỹ hơn ở mục tương ứng), cũng như động lực để khám phá thêm biến đổi biến mục tiêu ở Phần Cải tiến mô hình.
+
+Mỗi giả định được kiểm định bằng một cặp giả thuyết riêng, $H_0$ luôn là "giả định được thỏa". Bốn kiểm định dưới đây đều chạy trên phần dư của `m_ols` (Mô hình 1):
+
+```{r de-blue-tests}
+reset_ols   <- lmtest::resettest(m_ols, power = 2:3, type = "fitted")
+bp_ols      <- lmtest::bptest(m_ols)
+dw_ols      <- lmtest::dwtest(m_ols)
+shapiro_ols <- shapiro.test(residuals(m_ols))
+skew_ols    <- mean((residuals(m_ols) - mean(residuals(m_ols)))^3) / sd(residuals(m_ols))^3
+```
+
+**1. Tuyến tính đúng dạng — kiểm định RESET (Ramsey 1969).**
+
+$H_0: \text{dạng hàm tuyến tính hiện tại là đúng } (\text{không thiếu số hạng phi tuyến của các giá trị dự đoán})$  
+$H_1: \text{dạng hàm sai } (\text{còn thiếu cấu trúc phi tuyến, ví dụ bậc hai, tương tác})$
+
+Kết quả: F = `r round(unname(reset_ols$statistic), 2)`, p `r format.pval(reset_ols$p.value, digits = 3, eps = 1e-16)` — `r ifelse(reset_ols$p.value < 0.05, "**bác bỏ H0**", "**không bác bỏ H0**")`.
+
+**2. Phương sai sai số đồng nhất — kiểm định Breusch–Pagan.**
+
+$H_0: \text{Var}(\varepsilon_i \mid X) = \sigma^2 \quad (\text{phương sai đồng nhất — sai số chuẩn và kiểm định t/F đáng tin cậy})$  
+$H_1: \text{phương sai sai số thay đổi theo biến dự báo } (\text{sai số chuẩn có thể bị chệch, làm kiểm định t/F kém tin cậy})$
+
+Kết quả: BP = `r round(unname(bp_ols$statistic), 2)`, p `r format.pval(bp_ols$p.value, digits = 3, eps = 1e-16)` — `r ifelse(bp_ols$p.value < 0.05, "**bác bỏ H0**", "**không bác bỏ H0**")`.
+
+**3. Sai số không tự tương quan — kiểm định Durbin–Watson.**
+
+$H_0: \rho = 0 \quad (\text{không có tự tương quan bậc 1 giữa các phần dư})$  
+$H_1: \rho \neq 0 \quad (\text{các phần dư liền kề có tương quan với nhau})$
+
+Kết quả: DW = `r round(unname(dw_ols$statistic), 2)`, p `r format.pval(dw_ols$p.value, digits = 3, eps = 1e-16)` — `r ifelse(dw_ols$p.value < 0.05, "**bác bỏ H0**", "**không bác bỏ H0**")`. Lưu ý: DW được thiết kế cho dữ liệu có thứ tự thời gian tự nhiên; với dữ liệu cắt ngang (cross-sectional) như bộ này, kiểm định này chủ yếu đóng vai trò rà soát theo checklist BLUE chuẩn hơn là phát hiện một cơ chế tự tương quan có thể diễn giải được.
+
+**4. Phần dư phân phối chuẩn — kiểm định Shapiro–Wilk.**
+
+$H_0: \text{phần dư có phân phối chuẩn } (\text{kiểm định t/F và khoảng tin cậy chính xác ở cỡ mẫu hữu hạn})$  
+$H_1: \text{phần dư không có phân phối chuẩn } (\text{kiểm định t/F và khoảng tin cậy chỉ còn đúng xấp xỉ tiệm cận})$
+
+Kết quả: W = `r round(unname(shapiro_ols$statistic), 3)`, p `r format.pval(shapiro_ols$p.value, digits = 3, eps = 1e-16)` — `r ifelse(shapiro_ols$p.value < 0.05, "**bác bỏ H0**", "**không bác bỏ H0**")` (hệ số bất đối xứng phần dư ≈ `r round(skew_ols, 2)`, lệch phải — hệ quả từ phân phối lệch phải của `salary_in_usd`, phần EDA).
+
+**5. Không đa cộng tuyến hoàn hảo — GVIF chuẩn hoá.** Không phải kiểm định giả thuyết chính thức (không có p-value) mà là quy tắc kinh nghiệm: GVIF chuẩn hoá vượt ngưỡng tham khảo $\sqrt5 \approx 2.24$ cho thấy đa cộng tuyến đáng lo ngại. Kết quả: GVIF chuẩn hoá lớn nhất = `r round(vif_max, 2)` — **không vi phạm** (đã tính ở mục VIF phía trên).
+
+```{r de-blue-table}
+bang_blue <- data.frame(
+  Gia_dinh = c("1. Tuyến tính đúng dạng (RESET)",
+               "2. Phương sai sai số đồng nhất (Breusch–Pagan)",
+               "3. Sai số không tự tương quan (Durbin–Watson)",
+               "4. Phần dư phân phối chuẩn (Shapiro–Wilk)",
+               "5. Không đa cộng tuyến hoàn hảo (GVIF chuẩn hoá)"),
+  Thong_ke = c(round(unname(reset_ols$statistic), 2),
+               round(unname(bp_ols$statistic), 2),
+               round(unname(dw_ols$statistic), 2),
+               round(unname(shapiro_ols$statistic), 3),
+               round(vif_max, 2)),
+  p_value  = c(format.pval(reset_ols$p.value, digits = 3, eps = 1e-16),
+               format.pval(bp_ols$p.value, digits = 3, eps = 1e-16),
+               format.pval(dw_ols$p.value, digits = 3, eps = 1e-16),
+               format.pval(shapiro_ols$p.value, digits = 3, eps = 1e-16),
+               "—"),
+  Ket_luan = c(
+    ifelse(reset_ols$p.value < 0.05, "Vi phạm (p < 0.05)", "Không vi phạm"),
+    ifelse(bp_ols$p.value    < 0.05, "Vi phạm (p < 0.05)", "Không vi phạm"),
+    ifelse(dw_ols$p.value    < 0.05, "Vi phạm (p < 0.05)", "Không vi phạm"),
+    ifelse(shapiro_ols$p.value < 0.05, "Vi phạm (p < 0.05)", "Không vi phạm"),
+    ifelse(vif_max > sqrt(5), "Cần lưu ý (GVIF > căn 5)", "Không vi phạm")
+  )
+)
+n_vi_pham <- sum(grepl("Vi phạm|Cần lưu ý", bang_blue$Ket_luan))
+
+bang_blue |>
+  kbl(booktabs = TRUE, caption = "Tóm tắt 5 giả định BLUE (Gauss–Markov) của mô hình OLS (Mô hình 1) trên tập huấn luyện",
+      col.names = c("Giả định (H0 = giả định được thỏa)", "Thống kê", "p-value", "Kết luận (alpha = 0.05)")) |>
+  kable_styling(bootstrap_options = c("hover"), latex_options = c("HOLD_position", "scale_down"), font_size = 11) |>
+  column_spec(4, bold = TRUE,
+              color = ifelse(grepl("Vi phạm|Cần lưu ý", bang_blue$Ket_luan), "red", "darkgreen"))
+```
+
+Tổng cộng `r n_vi_pham`/5 giả định bị vi phạm hoặc cần lưu ý. Theo nguyên tắc quyết định chuẩn (Sheather 2009, ch. 4; Dalpiaz 2021, ch. 13): 0–1/5 vi phạm thì OLS vẫn là mô hình suy diễn chính; 2/5 thì OLS chỉ mang tính tham khảo; từ 3/5 trở lên thì OLS chỉ nên là baseline dự đoán. Các vi phạm này **không** làm hệ số OLS bị chệch, mà chỉ làm sai số chuẩn (và do đó p-value, khoảng tin cậy) kém tin cậy hơn — đây là động lực để khám phá biến đổi mục tiêu (log, Box–Cox) và kiểm định hoán vị không tham số ở Phần Cải tiến mô hình, cũng như đưa Ridge/LASSO vào so sánh.
+
+#### Mô hình 2 — OLS rút gọn bằng stepwise AIC
+
+**Mục tiêu.** Mô hình 1 giữ nguyên 8 khối biến dù một số không có ý nghĩa thống kê (`work_year`, `remote_ratio`, phần lớn `employment_type`). Mục này dùng **stepwise selection theo AIC** (Akaike 1974) để tìm một mô hình OLS rút gọn, làm cơ sở so sánh với mô hình đầy đủ và Ridge/LASSO.
+
+AIC được định nghĩa $\text{AIC} = -2\log(\hat L) + 2k$ ($\hat L$: hợp lý cực đại, $k$: số tham số); AIC càng nhỏ càng được ưu tiên, khác $R^2$ vốn không tự phạt độ phức tạp. Thuật toán stepwise hai chiều (`direction = "both"`) xuất phát từ Mô hình 1, mỗi bước xét thêm/bớt một khối biến (theo **cả khối**, không theo từng mức như LASSO), giữ lại thay đổi giảm AIC nhiều nhất, dừng khi không còn cải thiện. Kết quả `trace = 1` dưới đây in đầy đủ từng bước: AIC của mô hình hiện tại (`<none>`) cùng AIC nếu bỏ (`-`)/thêm (`+`) từng khối, sắp xếp tăng dần — thuật toán dừng khi `<none>` đã là lựa chọn nhỏ nhất:
+
+```{r de-model-stepwise}
+m_step <- step(m_ols, direction = "both", trace = 1)
+summary(m_step)
+```
+
+```{r de-stepwise-stats}
+bien_loai_bo <- setdiff(attr(terms(m_ols), "term.labels"), attr(terms(m_step), "term.labels"))
+s_step   <- summary(m_step)
+aic_ols  <- AIC(m_ols)
+aic_step <- AIC(m_step)
+
+txt_bien_loai_bo <- if (length(bien_loai_bo) == 0) {
+  "không nhân tố nào (mô hình đầy đủ đã tối ưu theo AIC)"
+} else {
+  paste0("nhân tố ", paste(paste0("`", bien_loai_bo, "`"), collapse = ", "))
+}
+```
+
+AIC giảm từ `r round(aic_ols, 1)` (Mô hình 1, đầy đủ) xuống `r round(aic_step, 1)` (mô hình rút gọn) — thuật toán loại bỏ `r txt_bien_loai_bo`. $R^2$ trên tập huấn luyện của mô hình rút gọn là `r round(s_step$r.squared, 3)`, gần như không đổi so với `r round(s_ols$r.squared, 3)` của Mô hình 1 — đúng như kỳ vọng lý thuyết: stepwise chỉ loại các nhân tố đóng góp cực ít vào độ khớp, nên $R^2$ giảm không đáng kể dù mô hình đơn giản hơn.
+
+Điểm khác biệt về phương pháp cần lưu ý so với LASSO (Mô hình 4): stepwise AIC quyết định giữ/loại theo **cả khối** biến phân loại, còn LASSO co hệ số theo **từng cột biến giả riêng lẻ** (đã nêu ở mục Mô hình 3 và 4 ngay dưới đây) — hai cách tiếp cận có thể cho kết luận khác nhau về cùng một nhân tố, và sẽ được đối chiếu ở Phần Đánh giá và so sánh mô hình cùng RMSE/MAE/R² trên tập kiểm định.
+
+**Kiểm định F lồng nhau: mô hình rút gọn có mất thông tin có ý nghĩa so với mô hình đầy đủ không?** AIC thấp hơn chỉ cho biết Mô hình 2 *được ưu tiên hơn*, chưa phải kiểm định giả thuyết chính thức. Vì Mô hình 2 **lồng trong** Mô hình 1 (chỉ ép hệ số các nhân tố bị loại về 0), có thể so sánh bằng partial F-test (extra sum of squares F-test):
+
+$H_0: \text{các hệ số của (các) nhân tố bị loại đồng thời bằng 0 } (\text{Mô hình 2 rút gọn không mất thông tin có ý nghĩa so với Mô hình 1})$  
+$H_1: \text{tồn tại ít nhất một hệ số bị loại khác 0 } (\text{Mô hình 1 đầy đủ giải thích tốt hơn có ý nghĩa so với Mô hình 2})$
+
+```{r de-nested-ftest}
+if (length(bien_loai_bo) > 0) {
+  anova_step_full <- anova(m_step, m_ols)
+  f_nested   <- anova_step_full$F[2]
+  df1_nested <- anova_step_full$Df[2]
+  df2_nested <- anova_step_full$Res.Df[2]
+  p_nested   <- anova_step_full$`Pr(>F)`[2]
+}
+```
+
+`r if (length(bien_loai_bo) > 0) paste0("Kết quả: F = ", round(f_nested, 2), " trên (", df1_nested, ", ", df2_nested, ") bậc tự do, p ", format.pval(p_nested, digits = 3, eps = 1e-16), " — ", ifelse(p_nested < 0.05, "bác bỏ H0: nhân tố bị loại vẫn đóng góp có ý nghĩa, nên Mô hình 1 (đầy đủ) được ưu tiên cho suy diễn; Mô hình 2 chỉ nên dùng để so sánh khả năng dự đoán", "không bác bỏ H0: nhân tố bị loại không đóng góp thêm có ý nghĩa — xác nhận Mô hình 2 không mất thông tin so với Mô hình 1, nhất quán với AIC giảm và R2 gần như không đổi"), ".") else "Thuật toán stepwise không loại nhân tố nào khỏi Mô hình 1, nên hai mô hình trùng nhau và không có kiểm định F lồng nhau nào cần thực hiện."`
+
+#### Mô hình 3 và 4 — Hồi quy Ridge và LASSO
+
+**Mục tiêu.** Bảng BLUE ghi nhận `r n_vi_pham`/5 giả định bị vi phạm — căn cứ để đưa vào so sánh các phương pháp không dựa vào giả định phân phối/phương sai của OLS, đồng thời ổn định hoá hệ số của các nhóm cỡ mẫu nhỏ (`Freelance`, `Contract`, `Other`). Vì Ridge/LASSO cố ý đánh đổi độ chệch để giảm phương sai, khái niệm BLUE (định nghĩa cho ước lượng không chệch) không áp dụng cho hai phương pháp này — đây là lý do kiểm định BLUE chỉ thực hiện cho Mô hình 1.
+
+Cả hai phương pháp đều tối thiểu hoá tổng bình phương phần dư **cộng thêm một số hạng phạt** trên độ lớn của hệ số:
+
+$$\text{Ridge:} \; \sum_i (y_i - \hat y_i)^2 + \lambda \sum_j \beta_j^2, \qquad \text{LASSO:} \; \sum_i (y_i - \hat y_i)^2 + \lambda \sum_j |\beta_j|,$$
+
+với $\lambda \ge 0$ điều khiển mức phạt. Phạt $L_2$ của Ridge co đều mọi hệ số về gần 0 nhưng không bao giờ đưa về đúng 0; phạt $L_1$ của LASSO có thể đưa hệ số về **đúng 0**, tức tự động loại biến (Zou & Hastie 2005). Đánh đổi ở đây là chấp nhận một phần độ chệch (bias) để giảm phương sai (variance) của ước lượng — có lợi khi một số nhóm cỡ mẫu nhỏ khiến hệ số OLS dao động mạnh giữa các mẫu. Giá trị $\lambda$ tối ưu của từng phương pháp được chọn bằng **10-fold cross-validation** trên tập huấn luyện:
+
+```{r de-model-ridge-lasso, fig.height=3.4}
+x_train <- model.matrix(f_full, data = train_df)[, -1]
+y_train <- train_df$salary_in_usd
+
+set.seed(2026)
+cv_ridge <- cv.glmnet(x_train, y_train, alpha = 0)
+set.seed(2026)
+cv_lasso <- cv.glmnet(x_train, y_train, alpha = 1)
+
+par(mfrow = c(1, 2))
+plot(cv_ridge); title("Ridge - duong cong CV theo log(lambda)", line = 2.5)
+plot(cv_lasso); title("LASSO - duong cong CV theo log(lambda)", line = 2.5)
+```
+
+Mỗi biểu đồ vẽ sai số bình phương trung bình ước lượng bằng cross-validation (trục tung, kèm thanh sai số) theo $\log(\lambda)$ (trục hoành); dãy số phía trên cho biết số hệ số khác 0 tại mỗi mức phạt. Đường đứt nét bên trái đánh dấu $\lambda_{min}$ — mức phạt cho sai số CV thấp nhất, được dùng cho toàn bộ kết quả bên dưới; đường bên phải là $\lambda_{1se}$ — mô hình đơn giản nhất còn nằm trong một sai số chuẩn của mức tối ưu.
+
+```{r de-lasso-coef}
+lasso_coef <- as.matrix(coef(cv_lasso, s = "lambda.min"))
+ridge_coef <- as.matrix(coef(cv_ridge, s = "lambda.min"))
+
+data.frame(
+  Biến          = rownames(lasso_coef),
+  Ridge         = round(ridge_coef[, 1], 1),
+  LASSO         = round(lasso_coef[, 1], 1)
+) |>
+  filter(Biến != "(Intercept)") |>
+  kbl(booktabs = TRUE, caption = "Hệ số Ridge và LASSO tại lambda tối ưu (10-fold CV); hệ số LASSO bị co về đúng 0 được tô đỏ") |>
+  kable_styling(bootstrap_options = c("hover"), latex_options = c("HOLD_position", "scale_down"), font_size = 11) |>
+  column_spec(3, bold = TRUE,
+              color = ifelse(round(lasso_coef[rownames(lasso_coef) != "(Intercept)", 1], 1) == 0,
+                              "red", "black"))
+```
+
+```{r de-lasso-summary}
+n_lasso_zero <- sum(lasso_coef[rownames(lasso_coef) != "(Intercept)", 1] == 0)
+lasso_work_year  <- lasso_coef["work_year", 1]
+lasso_remote_h   <- lasso_coef["remote_ratioHybrid", 1]
+```
+
+$\lambda$ tối ưu của Ridge là `r round(cv_ridge$lambda.min, 1)`, của LASSO là `r round(cv_lasso$lambda.min, 1)`. Ba quan sát chính từ bảng hệ số:
+
+- LASSO co **`r n_lasso_zero`/18** hệ số về đúng 0 (`company_sizeMedium`, `remote_ratioFullRemote`), và co `work_year` xuống còn `r round(lasso_work_year, 1)` USD/năm — gần như triệt tiêu. Kết quả này sẽ được đối chiếu với ANOVA Type II ở Phần Đánh giá mô hình: nếu cả hai phương pháp (co hệ số và kiểm định theo khối) cùng kết luận `work_year`/`remote_ratio` không còn thông tin dự đoán, đó là bằng chứng hội tụ đáng tin cậy.
+- Các hệ số lớn nhất — `company_regionEurope`, `company_regionRest_of_World`, `experience_levelExec`, `experience_levelSenior` — giữ nguyên dấu và độ lớn gần tương đương giữa Ridge, LASSO và OLS: tín hiệu của các yếu tố chính rất ổn định, không phụ thuộc phương pháp ước lượng.
+- Một giới hạn kỹ thuật cần minh bạch: LASSO thường co hệ số theo **từng cột biến giả riêng lẻ**, không theo cả khối nhân tố — nên `remote_ratio` (3 mức) chỉ bị loại một phần (`FullRemote` về 0, `Hybrid` thì không); muốn chọn biến theo khối cần grouped LASSO, được nêu ở phần đề xuất cải tiến.
+
+```{r de-predict-save}
+pred_ols   <- predict(m_ols, newdata = test_df)
+pred_step  <- predict(m_step, newdata = test_df)
+
+x_test     <- model.matrix(f_full, data = test_df)[, -1]
+pred_ridge <- as.numeric(predict(cv_ridge, s = "lambda.min", newx = x_test))
+pred_lasso <- as.numeric(predict(cv_lasso, s = "lambda.min", newx = x_test))
+```
+
+### Tóm tắt
+
+```{r de-summary-table}
+data.frame(
+  Mô_hình = c("1. OLS", "2. OLS rút gọn (stepwise AIC)", "3. Ridge", "4. LASSO"),
+  Đặc_điểm = c(
+    paste0("Baseline tuyến tính; R2 = ", round(s_ols$r.squared, 3),
+           ", F(", f_stat[2], ", ", f_stat[3], ") có ý nghĩa rất mạnh; work_year và remote_ratio không có ý nghĩa"),
+    paste0("Chọn biến theo cả khối bằng AIC; AIC ", round(aic_ols,1), " → ", round(aic_step,1),
+           "; R2 = ", round(s_step$r.squared, 3), ", gần như không đổi so với Mô hình 1"),
+    paste0("Phạt L2, lambda = ", round(cv_ridge$lambda.min, 1),
+           " — co đều mọi hệ số, ổn định hoá nhóm cỡ mẫu nhỏ"),
+    paste0("Phạt L1, lambda = ", round(cv_lasso$lambda.min, 1),
+           " — tự loại ", n_lasso_zero, "/18 hệ số, sẽ đối chiếu với ANOVA Type II ở Phần Đánh giá mô hình")
+  ),
+  row.names = NULL
+) |>
+  kbl(booktabs = TRUE, caption = "Bốn mô hình dự đoán được xây dựng trên tập huấn luyện") |>
+  kable_styling(bootstrap_options = c("hover"), latex_options = c("HOLD_position"), font_size = 11) |>
+  column_spec(1, bold = TRUE, width = "4cm") |>
+  column_spec(2, width = "11cm")
+```
+
+Phần này đã xử lý: 
+
+(i) chia dữ liệu thành tập huấn luyện/kiểm định và xây dựng bốn mô hình dự đoán — `m_ols`, `m_step`, `cv_ridge`, `cv_lasso` — cùng các dự đoán tương ứng trên tập kiểm định (`pred_ols`, `pred_step`, `pred_ridge`, `pred_lasso`); 
+
+(ii) kiểm định các giả định BLUE của Mô hình 1 (RESET, Breusch–Pagan, Durbin–Watson, Shapiro–Wilk, GVIF), xác định mức độ tin cậy của các hệ số và kiểm định t/F. Phần tiếp theo so sánh cả bốn mô hình bằng RMSE, MAE, $R^2$ trên cùng tập kiểm định, chọn mô hình tốt nhất, rồi diễn giải các biến quan trọng — kết hợp hệ số mô hình với các kiểm định so sánh nhóm (Welch ANOVA, Games–Howell, ANOVA nhiều nhân tố). Biến đổi mục tiêu (log, Box–Cox) được khám phá thêm ở Phần Cải tiến mô hình.

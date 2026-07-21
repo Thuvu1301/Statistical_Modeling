@@ -18,7 +18,6 @@ packages <- c(
   "GGally",      # bieu do cap doi (pairs plot)
   "caret",       # chia train/test, tien ich mo hinh
   "glmnet",      # Ridge, LASSO
-  "pls",         # PCR (hoi quy tren thanh phan chinh)
   "leaps",       # lua chon bien (tham khao)
   "scales",      # dinh dang truc/nhan bieu do
   "knitr",       # bang bieu, child document

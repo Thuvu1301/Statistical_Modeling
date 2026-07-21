@@ -1,9 +1,352 @@
-<!--
-## Đánh giá và so sánh mô hình
+## Đánh giá, so sánh mô hình và diễn giải biến quan trọng
 
-```{r p2-compare}
-# TODO: dùng compare_models() từ config/setup.R để tổng hợp RMSE, MAE, R2
+Phần trước đã xây dựng 4 mô hình dự đoán (OLS, OLS rút gọn, Ridge, LASSO) cùng dự đoán trên tập kiểm định `test_df` — dữ liệu không tham gia ước lượng. Phần này đánh giá khách quan cả 4 mô hình, chọn mô hình tốt nhất, rồi diễn giải các biến quan trọng; Phần Cải tiến mô hình khám phá thêm biến đổi thang đo mục tiêu (log, Box–Cox).
+
+```{r fg-packages}
+if (!requireNamespace("rstatix", quietly = TRUE)) install.packages("rstatix")
+library(rstatix)
 ```
 
-diễn giải ý nghĩa các biến trong mô hình
--->
+### Đánh giá và so sánh mô hình bằng RMSE, MAE, R²
+
+**Mục tiêu.** Đánh giá khách quan cả 4 mô hình và chọn mô hình tốt nhất. Cả ba chỉ số đều tính trên **tập kiểm định** `test_df` — dữ liệu không tham gia ước lượng — vì đánh giá trên dữ liệu huấn luyện luôn lạc quan quá mức (James et al. 2023, ch. 2). So sánh RMSE/MAE/R² dưới đây là so sánh **mô tả**, không phải kiểm định giả thuyết chính thức (không có $H_0$/$H_1$); hướng khắc phục (kiểm định Diebold–Mariano) được nêu ở Phần Cải tiến mô hình. Ba chỉ số dùng các hàm chung `rmse()`, `mae()`, `r2_score()` (`config/setup.R`):
+
+- **RMSE** (Root Mean Squared Error): $\sqrt{\frac{1}{n}\sum (y_i - \hat y_i)^2}$ — đơn vị USD, phạt nặng các sai số lớn.
+- **MAE** (Mean Absolute Error): $\frac{1}{n}\sum |y_i - \hat y_i|$ — đơn vị USD, ít nhạy với sai số cực đoan hơn RMSE.
+- **R²** trên tập kiểm định: $1 - \frac{\sum (y_i - \hat y_i)^2}{\sum (y_i - \bar y)^2}$ — tỷ lệ phương sai của `salary_in_usd` mà mô hình giải thích được trên dữ liệu **chưa từng thấy**.
+
+```{r fg-compare}
+y_test <- test_df$salary_in_usd
+
+bang_so_sanh <- bind_rows(
+  compare_models("1. OLS",                          y_test, pred_ols),
+  compare_models("2. OLS rút gọn (stepwise AIC)",    y_test, pred_step),
+  compare_models("3. Ridge",                         y_test, pred_ridge),
+  compare_models("4. LASSO",                         y_test, pred_lasso)
+) |>
+  arrange(RMSE) |>
+  mutate(Hạng = row_number()) |>
+  relocate(Hạng)
+
+bang_so_sanh |>
+  mutate(RMSE = fmt(RMSE), MAE = fmt(MAE), R2 = round(R2, 4)) |>
+  kbl(booktabs = TRUE, caption = "So sánh RMSE, MAE, R² trên tập kiểm định (111 quan sát), xếp theo RMSE tăng dần",
+      col.names = c("Hạng", "Mô hình", "RMSE", "MAE", "R² (test)")) |>
+  kable_styling(bootstrap_options = c("hover"), latex_options = c("HOLD_position", "scale_down"), font_size = 11) |>
+  column_spec(2, bold = TRUE) |>
+  row_spec(1, background = "#e8f5e9")
+```
+
+```{r fg-compare-plot, fig.height=2.6}
+bang_so_sanh |>
+  mutate(Model = factor(Model, levels = rev(Model))) |>
+  ggplot(aes(x = Model, y = RMSE, fill = Model == bang_so_sanh$Model[1])) +
+  geom_col(show.legend = FALSE, width = 0.65) +
+  geom_text(aes(label = fmt(RMSE)), hjust = -0.1, size = 3.4) +
+  scale_fill_manual(values = c(`TRUE` = COL_PRIMARY, `FALSE` = "#9CC6F3")) +
+  scale_y_continuous(labels = label_comma(prefix = "$"), expand = expansion(mult = c(0, 0.18))) +
+  coord_flip() +
+  labs(title = "RMSE trên tập kiểm định — 4 mô hình dự đoán",
+       subtitle = "Cột đậm: mô hình có RMSE thấp nhất", x = NULL, y = "RMSE (USD)")
+```
+
+```{r fg-best-model}
+mo_hinh_tot_nhat <- bang_so_sanh$Model[1]
+```
+
+```{r fg-stepwise-note}
+rmse_ols  <- bang_so_sanh$RMSE[bang_so_sanh$Model == "1. OLS"]
+rmse_step <- bang_so_sanh$RMSE[bang_so_sanh$Model == "2. OLS rút gọn (stepwise AIC)"]
+```
+
+Hai nhận xét đáng chú ý. **Ridge có RMSE, MAE thấp nhất và R² cao nhất**, nhưng chênh lệch với LASSO rất nhỏ — cả hai đều nhỉnh hơn OLS thuần túy, đúng như kỳ vọng khi các nhóm nhỏ (`Freelance`, `Contract`, `Other`) khiến OLS kém ổn định. **OLS rút gọn (stepwise AIC)** có RMSE `r fmt(rmse_step)` — `r ifelse(rmse_step < rmse_ols, "thấp hơn", ifelse(rmse_step == rmse_ols, "bằng đúng", "cao hơn"))` OLS đầy đủ (`r fmt(rmse_ols)`) — việc bớt biến gần như không đổi khả năng dự đoán, nhưng không đạt cải thiện rõ rệt như Ridge/LASSO. Phần Cải tiến mô hình sẽ khám phá thêm liệu biến đổi thang đo mục tiêu (log, Box–Cox) có cải thiện hơn không.
+
+Mô hình được chọn để diễn giải là **`r mo_hinh_tot_nhat`** — RMSE ≈ `r fmt(bang_so_sanh$RMSE[1])`, MAE ≈ `r fmt(bang_so_sanh$MAE[1])`, R² ≈ `r round(bang_so_sanh$R2[1], 3)` trên tập kiểm định. Với một hồ sơ chưa từng xuất hiện trong tập huấn luyện, mô hình dự đoán sai lệch trung bình khoảng `r fmt(bang_so_sanh$MAE[1])`/năm so với lương thực nhận — đáng kể so với trung vị lương (~\$100,000), phản ánh phần biến động lương còn lại đến từ các yếu tố cá nhân không có trong dữ liệu (năng lực cụ thể, thương lượng, công ty cụ thể...). R² trên tập kiểm định thấp hơn khá nhiều so với R² huấn luyện (~0.51) — một phần là bình thường (R² trên chính dữ liệu huấn luyện luôn lạc quan), nhưng mức chênh (~0.51 xuống ~0.36) cũng phản ánh cỡ mẫu kiểm định nhỏ (111 quan sát) trong khi `salary_in_usd` lệch phải mạnh, khiến $R^2$ nhạy với vài quan sát lương cao bị dự đoán lệch. Độ nhạy này được kiểm tra kỹ hơn bằng Cook's distance và hồi quy vững ở Phần Cải tiến mô hình.
+
+### Diễn giải ý nghĩa các biến quan trọng trong mô hình được chọn
+
+**Mục tiêu.** Diễn giải ý nghĩa thực tế của các biến quan trọng trong mô hình tốt nhất (Ridge) — không chỉ biến nào có ý nghĩa thống kê, mà còn xếp hạng biến nào **quan trọng hơn về độ lớn thực tế**. Vì Ridge không đưa hệ số nào về 0, độ lớn hệ số **không so sánh trực tiếp được** giữa các biến khác thang đo (`work_year` theo năm, còn lại là dummy 0/1). Hệ số được **chuẩn hoá** bằng độ lệch chuẩn của biến dự báo tương ứng trong tập huấn luyện — tương đương mức thay đổi kỳ vọng của `salary_in_usd` khi biến đó thay đổi 1 độ lệch chuẩn (hoặc đúng bản chất 0/1 với dummy).
+
+```{r fg-ridge-importance, fig.height=3.4}
+ridge_coef_vec <- as.numeric(ridge_coef[, 1])
+names(ridge_coef_vec) <- rownames(ridge_coef)
+ridge_coef_vec <- ridge_coef_vec[names(ridge_coef_vec) != "(Intercept)"]
+
+sd_predictors <- apply(x_train, 2, sd)
+he_so_chuan_hoa <- ridge_coef_vec * sd_predictors[names(ridge_coef_vec)]
+
+bang_importance <- data.frame(
+  Bien              = names(he_so_chuan_hoa),
+  He_so_goc         = round(ridge_coef_vec, 1),
+  He_so_chuan_hoa   = round(he_so_chuan_hoa, 1)
+) |>
+  arrange(desc(abs(He_so_chuan_hoa))) |>
+  mutate(Bien = factor(Bien, levels = rev(Bien)))
+
+ggplot(bang_importance, aes(x = Bien, y = He_so_chuan_hoa, fill = He_so_chuan_hoa > 0)) +
+  geom_col(show.legend = FALSE) +
+  scale_fill_manual(values = c(`TRUE` = COL_PRIMARY, `FALSE` = unname(PAL_CATEGORY[4]))) +
+  coord_flip() +
+  labs(title = "Mức độ quan trọng của biến trong mô hình Ridge (hệ số đã chuẩn hoá)",
+       subtitle = "Xanh: tăng lương kỳ vọng — Đỏ: giảm lương kỳ vọng, so với mức tham chiếu",
+       x = NULL, y = "Hệ số chuẩn hoá (USD)")
+```
+
+Ba nhóm biến nổi bật nhất — nhất quán với cả bảng hệ số OLS có ý nghĩa thống kê (Phần Xây dựng mô hình dự đoán, Mô hình 1) lẫn ma trận tương quan (Phần Phân tích khám phá dữ liệu (EDA)):
+
+- **`company_region`** (`Europe`, `Rest_of_World`) đứng đầu bảng xếp hạng, cả hai mang dấu âm — công ty ngoài Bắc Mỹ trả thấp hơn đáng kể, cùng chiều và mức ý nghĩa cao (p < 0.001) như hệ số OLS.
+- **`experience_level`** (`Senior`, `Exec`) đứng ngay sau, dấu dương và tăng theo cấp bậc — xác nhận kinh nghiệm là yếu tố mạnh thứ hai, khớp với tương quan Pearson mạnh nhất ở phần EDA.
+- **`job_category`** (`Data Scientist`, `ML Engineer`, `Data Engineer`) xếp sau, đều dương và có ý nghĩa so với baseline `Data Analyst` (p < 0.001 cả ba) — Data Analyst là nhóm trả lương thấp nhất.
+
+Ảnh hưởng yếu nhất: `remote_ratioFullRemote`, `company_sizeMedium` có hệ số chuẩn hoá gần 0 — cũng là hai hệ số bị LASSO co về 0. `work_year` xếp gần cuối dù đã chuẩn hoá — khớp với hệ số OLS không có ý nghĩa (p > 0.3). Ba phương pháp độc lập — t-test OLS, LASSO, hệ số chuẩn hoá Ridge — hội tụ về cùng kết luận: `work_year` và phần lớn `remote_ratio` đóng góp rất ít một khi đã biết `experience_level`, `job_category`, `company_region`.
+
+#### So sánh mức lương giữa các nhóm bằng phân tích phương sai (kiểm chứng thêm cho các biến quan trọng)
+
+**Mục tiêu.** Hệ số Ridge xếp hạng được biến nào quan trọng, nhưng không tự nhiên cho biết mức lương **giữa từng cặp nhóm cụ thể** chênh lệch bao nhiêu và có chắc chắn không. Mục này chạy các kiểm định so sánh nhóm trên **toàn bộ 565 quan sát** (không cần giữ tập kiểm định riêng), như một lớp bằng chứng độc lập thứ hai cho việc xác định biến quan trọng.
+
+##### Welch ANOVA và Kruskal–Wallis cho từng nhân tố
+
+
+**Mục tiêu.** So sánh mức lương trung bình giữa các nhóm của `job_category`, `experience_level`, `company_size`, `employment_type`, `remote_ratio` và `company_region` — mỗi nhân tố kiểm định **riêng lẻ**; ANOVA nhiều nhân tố ở mục sau sẽ xét đồng thời để tách hiệu ứng thực khỏi hiệu ứng "đội lốt" do các nhân tố tương quan nhau.
+
+Với mỗi nhân tố phân loại có $k$ nhóm, $\mu_i$ là mức lương trung bình của nhóm thứ $i$, cặp giả thuyết được kiểm định là:
+
+$H_0: \mu_1 = \mu_2 = \dots = \mu_k \quad (\text{mức lương trung bình giống nhau giữa mọi nhóm của nhân tố đang xét})$  
+$H_1: \text{tồn tại ít nhất một cặp } \mu_i \neq \mu_j \quad (\text{có ít nhất hai nhóm khác nhau về mức lương trung bình})$
+
+**Welch ANOVA** được dùng thay ANOVA cổ điển vì cỡ mẫu giữa các nhóm chênh lệch lớn (Full-time chiếm >96% của `employment_type`) và phương sai không đồng đều. **Kruskal–Wallis** (phi tham số) chạy song song để đối chiếu, vì `salary_in_usd` lệch phải rõ rệt.
+
+```{r fg-anova-welch}
+cac_nhan_to <- c("experience_level", "job_category", "company_size",
+                  "remote_ratio", "employment_type", "company_region")
+
+bang_welch_kw <- bind_rows(lapply(cac_nhan_to, function(v) {
+  f <- as.formula(paste("salary_in_usd ~", v))
+  w <- oneway.test(f, data = salary_model, var.equal = FALSE)
+  k <- kruskal.test(f, data = salary_model)
+  data.frame(
+    Nhan_to   = v,
+    Welch_F   = round(unname(w$statistic), 2),
+    df1       = round(unname(w$parameter[1]), 0),
+    df2       = round(unname(w$parameter[2]), 1),
+    p_Welch   = format.pval(w$p.value, digits = 3, eps = 1e-16),
+    KW_H      = round(unname(k$statistic), 2),
+    p_KW      = format.pval(k$p.value, digits = 3, eps = 1e-16)
+  )
+}))
+
+bang_welch_kw |>
+  kbl(booktabs = TRUE, caption = "Kiểm định Welch ANOVA và Kruskal–Wallis cho từng nhân tố (toàn bộ 565 quan sát)",
+      col.names = c("Nhân tố", "F (Welch)", "df tử", "df mẫu", "p (Welch)",
+                    "H (KW)", "p (KW)")) |>
+  kable_styling(bootstrap_options = c("hover"), latex_options = c("HOLD_position", "scale_down"), font_size = 11)
+```
+
+Cả sáu nhân tố đều có ý nghĩa thống kê ở mức $\alpha = 0.05$ theo **cả hai** kiểm định — sự đồng thuận giữa phương pháp tham số và phi tham số cho thấy kết luận không phụ thuộc vào giả định phân phối. Ba điểm cần lưu ý khi đọc bảng:
+
+- `experience_level` (F ≈ 65.1) và `company_region` (F ≈ 143.7) có thống kê F vượt trội so với các nhân tố còn lại — đúng thứ tự quan trọng mà ma trận tương quan ở phần EDA đã gợi ý.
+- `employment_type` tuy có p < 0.001 nhưng bậc tự do mẫu số của Welch chỉ xấp xỉ 7.5 — hệ quả của các nhóm Part-time/Contract/Freelance quá nhỏ (4–10 quan sát) — nên kết luận về nhân tố này cần thận trọng.
+- Các kiểm định ở đây là **đôi một** (chưa kiểm soát các nhân tố khác); mục ANOVA nhiều nhân tố bên dưới sẽ cho thấy bức tranh thay đổi thế nào khi các nhân tố được xét đồng thời.
+
+##### Hậu kiểm Games–Howell: cặp nhóm nào thực sự khác nhau?
+
+**Mục tiêu.** Welch ANOVA chỉ trả lời *có tồn tại* khác biệt hay không, chưa cho biết cặp nhóm nào khác nhau và chênh lệch bao nhiêu USD. Với mỗi cặp nhóm $(i, j)$ trong một nhân tố, cặp giả thuyết được kiểm định là:
+
+$H_0: \mu_i = \mu_j \quad (\text{hai nhóm } i \text{ và } j \text{ có mức lương trung bình bằng nhau})$  
+$H_1: \mu_i \neq \mu_j \quad (\text{hai nhóm } i \text{ và } j \text{ có mức lương trung bình khác nhau})$
+
+kiểm định đồng thời trên toàn bộ các cặp nhóm, với p-value hiệu chỉnh (`p.adj`) giữ tỷ lệ sai lầm loại I gia đình ở $\alpha = 0.05$. Hậu kiểm **Games–Howell** — tương thích với Welch, tự hiệu chỉnh cho so sánh bội — được áp dụng cho bốn nhân tố trọng tâm:
+
+```{r fg-anova-gh}
+gh_mot_nhan_to <- function(v) {
+  games_howell_test(salary_model, as.formula(paste("salary_in_usd ~", v))) |>
+    as.data.frame() |>
+    transmute(
+      Nhan_to    = v,
+      So_sanh    = paste(group1, "so với", group2),
+      Chenh_lech = fmt(estimate),
+      KTC_95     = paste0("[", fmt(conf.low), "; ", fmt(conf.high), "]"),
+      p_adj      = format.pval(p.adj, digits = 3, eps = 1e-4),
+      Ket_luan   = ifelse(p.adj < 0.05, "Khác biệt có ý nghĩa", "Không có ý nghĩa")
+    )
+}
+
+bang_gh <- bind_rows(lapply(c("experience_level", "company_region",
+                                "company_size", "remote_ratio"), gh_mot_nhan_to))
+
+bang_gh |>
+  kbl(booktabs = TRUE, caption = "Hậu kiểm Games–Howell: chênh lệch lương trung bình giữa từng cặp nhóm (nhóm sau trừ nhóm trước) kèm khoảng tin cậy 95 phần trăm",
+      col.names = c("Nhân tố", "So sánh", "Chênh lệch", "Khoảng tin cậy", "p hiệu chỉnh", "Kết luận")) |>
+  kable_styling(bootstrap_options = c("hover"), latex_options = c("HOLD_position", "scale_down"), font_size = 11) |>
+  column_spec(6, bold = TRUE,
+              color = ifelse(bang_gh$Ket_luan == "Khác biệt có ý nghĩa", "darkgreen", "red"))
+```
+
+Bảng hậu kiểm cho một bức tranh chi tiết hơn hẳn kiểm định tổng thể:
+
+- **`experience_level`**: cả 6 cặp đều khác biệt có ý nghĩa — thang lương phân tầng đơn điệu theo cấp bậc. Entry so với Exec chênh ~\$130,000/năm; ngay cặp sát nhau nhất (Senior so với Exec, ~\$53,000) cũng đạt ý nghĩa (p ≈ 0.04), dù khoảng tin cậy rộng do nhóm Exec chỉ có 26 quan sát.
+- **`company_region`**: cả 3 cặp đều có ý nghĩa. Bắc Mỹ trả cao hơn Europe ~\$71,500 và Rest_of_World ~\$90,100; chênh lệch Europe so với Rest_of_World (~\$18,600) cũng đạt ý nghĩa (p ≈ 0.02).
+- **`company_size`**: Small trả thấp hơn có ý nghĩa so với Medium (~\$36,900) và Large (~\$39,100), nhưng **Medium và Large không khác biệt** (p ≈ 0.94) — "phần thưởng quy mô" chỉ xuất hiện khi vượt khỏi nhóm nhỏ.
+- **`remote_ratio`**: bất ngờ nhất — **Hybrid** thấp hơn có ý nghĩa so với cả Onsite và FullRemote, trong khi hai nhóm này không khác nhau. Quan hệ không đơn điệu — lý do biến này có tương quan yếu ở phần EDA.
+
+##### ANOVA nhiều nhân tố: hiệu ứng của từng nhân tố sau khi kiểm soát các nhân tố còn lại
+
+
+**Mục tiêu.** Các nhân tố trong dữ liệu tương quan với nhau (ví dụ `experience_level` và `company_region` cùng thay đổi theo `work_year`), nên mục này trả lời: *hiệu ứng của một nhân tố lên lương có còn ý nghĩa khi mọi nhân tố khác được kiểm soát?* Đây cũng là kiểm chứng độc lập cho mô hình hồi quy (Mô hình 1, 4) — về bản chất cùng một mô hình tuyến tính, chỉ khác cách trình bày kiểm định. Với mỗi nhân tố $X_k$, cặp giả thuyết của F-test loại II là:
+
+$H_0: \text{mọi hệ số của các biến giả thuộc } X_k \text{ đồng thời bằng 0 } (\text{sau khi đã có mặt mọi nhân tố còn lại; } X_k \text{ không đóng góp thêm cho việc giải thích } \texttt{salary\_in\_usd})$  
+$H_1: \text{tồn tại ít nhất một hệ số của } X_k \text{ khác 0 } (\text{sau khi đã có mặt mọi nhân tố còn lại; } X_k \text{ vẫn đóng góp thực sự})$
+
+Kiểm định đôi một ở trên có hạn chế: các nhân tố tương quan với nhau (tỷ trọng Senior và công ty Bắc Mỹ cùng tăng theo năm), nên hiệu ứng đo được có thể là của nhân tố khác "đội lốt". ANOVA nhiều nhân tố khắc phục bằng **F-test loại II** — so sánh mô hình có/không có nhân tố đó khi mọi nhân tố còn lại đã có mặt; kết quả không phụ thuộc việc chọn nhóm tham chiếu, khác t-test từng hệ số.
+
+```{r fg-anova-factorial}
+m_factorial <- lm(salary_in_usd ~ experience_level + job_category + company_size +
+                    remote_ratio + employment_type + company_region +
+                    cross_border + work_year,
+                  data = salary_model)
+
+bang_anova2 <- car::Anova(m_factorial, type = 2) |>
+  as.data.frame() |>
+  tibble::rownames_to_column("Nhan_to") |>
+  filter(Nhan_to != "Residuals") |>
+  transmute(
+    Nhan_to,
+    Df       = Df,
+    F_value  = round(`F value`, 2),
+    p_value  = format.pval(`Pr(>F)`, digits = 3, eps = 1e-16),
+    Ket_luan = ifelse(`Pr(>F)` < 0.05, "Có ý nghĩa", "Không có ý nghĩa")
+  )
+
+bang_anova2 |>
+  kbl(booktabs = TRUE, caption = "ANOVA nhiều nhân tố (Type II) trên toàn bộ dữ liệu — mỗi nhân tố được kiểm định sau khi kiểm soát mọi nhân tố còn lại",
+      col.names = c("Nhân tố", "Df", "F", "p-value", "Kết luận")) |>
+  kable_styling(bootstrap_options = c("hover"), latex_options = c("HOLD_position", "scale_down"), font_size = 11) |>
+  column_spec(5, bold = TRUE,
+              color = ifelse(bang_anova2$Ket_luan == "Có ý nghĩa", "darkgreen", "red"))
+```
+
+So sánh với Welch ANOVA đôi một, phát hiện quan trọng nhất: **`remote_ratio` (p ≈ 0.22) và `work_year` (p ≈ 0.57) mất hoàn toàn ý nghĩa** khi các nhân tố khác được kiểm soát, dù cả hai có ý nghĩa mạnh khi xét đôi một — khớp với kết quả `work_year` không có ý nghĩa ở OLS và bị LASSO co gần về 0. Quan hệ thô giữa hai biến này với lương chủ yếu là **hiệu ứng gián tiếp qua cơ cấu mẫu** — các năm sau có nhiều hồ sơ Senior và công ty Bắc Mỹ hơn, nên lương trung bình tăng theo năm mà không phản ánh việc một hồ sơ cố định được trả cao hơn theo thời gian. Bốn nhân tố giữ ý nghĩa mạnh sau kiểm soát — `experience_level`, `company_region`, `job_category`, `cross_border` — là các yếu tố ảnh hưởng thực sự, hội tụ với kết quả OLS và LASSO ở trên.
+
+**Tổng hợp.** Hai lớp bằng chứng độc lập — hệ số chuẩn hoá Ridge và các kiểm định so sánh nhóm — hội tụ về cùng kết luận: `experience_level` và `company_region` là hai nhân tố ảnh hưởng mạnh và ổn định nhất, `job_category` đứng ngay sau; `work_year` và phần lớn `remote_ratio` không đóng góp thêm, khớp với việc LASSO co gần hết hệ số hai biến này về 0. Bức tranh đầy đủ gồm cả *biến nào* quan trọng, *quan trọng bao nhiêu* (Ridge, Games–Howell) và *có chắc chắn thống kê không* (t-test, Welch ANOVA, ANOVA Type II).
+
+##### Tương tác experience_level × company_region: hiệu ứng khu vực có đồng đều giữa các cấp kinh nghiệm không?
+
+**Mục tiêu.** ANOVA nhiều nhân tố ở trên giả định các hiệu ứng là **cộng tính** — chênh lệch lương giữa các khu vực được giả định như nhau ở mọi cấp kinh nghiệm. Mục này kiểm định trực tiếp giả định đó cho cặp nhân tố ảnh hưởng mạnh nhất, `experience_level` và `company_region` — đúng cặp đã được gợi ý có tương tác từ biểu đồ hộp ở Phần Phân tích khám phá dữ liệu (EDA): nếu hiệu ứng khu vực thực sự khác nhau tuỳ cấp kinh nghiệm, một hệ số khu vực duy nhất (mô hình cộng tính) sẽ "trung bình hoá" sai lệch, không phản ánh đúng bức tranh ở từng cấp bậc.
+
+$H_0$: hiệu ứng của `company_region` lên lương giống nhau ở mọi mức `experience_level` (không có tương tác; mô hình cộng tính đã đủ)  
+$H_1$: hiệu ứng của `company_region` lên lương khác nhau tuỳ mức `experience_level` (có tương tác)
+
+```{r fg-interaction-model}
+m_interaction  <- update(m_factorial, . ~ . + experience_level:company_region)
+anova_interact <- anova(m_factorial, m_interaction)
+f_interact   <- anova_interact$F[2]
+df1_interact <- anova_interact$Df[2]
+df2_interact <- anova_interact$Res.Df[2]
+p_interact   <- anova_interact$`Pr(>F)`[2]
+```
+
+Kết quả: F = `r round(f_interact, 2)` trên (`r df1_interact`, `r df2_interact`) bậc tự do, p `r format.pval(p_interact, digits = 3, eps = 1e-16)` — `r ifelse(p_interact < 0.05, "**bác bỏ H0**: hiệu ứng khu vực khác nhau có ý nghĩa tuỳ cấp kinh nghiệm", "**không bác bỏ H0**: không đủ bằng chứng cho thấy hiệu ứng khu vực khác nhau giữa các cấp kinh nghiệm")`.
+
+Kiểm định F lồng nhau ở trên cho biết **số hạng tương tác nói chung** có cải thiện mô hình hay không, nhưng gộp chung mọi bậc tự do của tương tác vào một con số duy nhất. Bảng dưới đây tách lại **từng nhân tố riêng lẻ** trong mô hình đã có tương tác — bao gồm cả tám nhân tố chính lẫn số hạng tương tác — theo đúng khuôn mẫu ANOVA Type II đã dùng ở bảng trên, để đối chiếu trực tiếp mức ý nghĩa của từng thành phần:
+
+```{r fg-interaction-anova-table}
+bang_anova_interact <- car::Anova(m_interaction, type = 2) |>
+  as.data.frame() |>
+  tibble::rownames_to_column("Nhan_to") |>
+  filter(Nhan_to != "Residuals") |>
+  transmute(
+    Nhan_to,
+    Df       = Df,
+    F_value  = round(`F value`, 2),
+    p_value  = format.pval(`Pr(>F)`, digits = 3, eps = 1e-16),
+    Ket_luan = ifelse(`Pr(>F)` < 0.05, "Có ý nghĩa", "Không có ý nghĩa")
+  )
+
+bang_anova_interact |>
+  kbl(booktabs = TRUE, caption = "ANOVA (Type II) của mô hình có thêm số hạng tương tác experience_level:company_region",
+      col.names = c("Nhân tố", "Df", "F", "p-value", "Kết luận")) |>
+  kable_styling(bootstrap_options = c("hover"), latex_options = c("HOLD_position", "scale_down"), font_size = 11) |>
+  column_spec(5, bold = TRUE,
+              color = ifelse(bang_anova_interact$Ket_luan == "Có ý nghĩa", "darkgreen", "red"))
+```
+
+So với bảng ANOVA cộng tính ban đầu (không có tương tác), các nhân tố chính giữ nguyên kết luận về ý nghĩa thống kê — thêm số hạng tương tác vào mô hình không làm đảo ngược vai trò của bất kỳ nhân tố nào đã xác định ở trên, chỉ bổ sung thêm một hàng cho `experience_level:company_region` với kết luận khớp với kiểm định F lồng nhau vừa trình bày.
+
+```{r fg-interaction-table}
+bang_cell_exp_region <- salary_model |>
+  group_by(experience_level, company_region) |>
+  summarise(n = n(), Trung_binh = mean(salary_in_usd), SD = sd(salary_in_usd), .groups = "drop") |>
+  arrange(experience_level, company_region)
+
+bang_cell_exp_region |>
+  mutate(Trung_binh_fmt = fmt(Trung_binh), SD_fmt = fmt(SD)) |>
+  select(experience_level, company_region, n, Trung_binh_fmt, SD_fmt) |>
+  kbl(booktabs = TRUE, caption = "Lương trung bình theo từng ô experience_level x company_region",
+      col.names = c("Kinh nghiệm", "Khu vực", "n", "Lương trung bình", "SD")) |>
+  kable_styling(bootstrap_options = c("hover"), latex_options = c("HOLD_position"), font_size = 11)
+```
+
+```{r fg-interaction-plot, fig.height=3}
+ggplot(bang_cell_exp_region, aes(x = company_region, y = Trung_binh, color = experience_level, group = experience_level)) +
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 2) +
+  scale_color_manual(values = PAL_EXP_LEVEL) +
+  scale_y_continuous(labels = label_comma(prefix = "$")) +
+  labs(title = "Biểu đồ tương tác: lương trung bình theo company_region, phân theo experience_level",
+       x = NULL, y = "Lương trung bình (USD)", color = "Kinh nghiệm\n(Exp Level)")
+```
+
+```{r fg-interaction-numbers}
+cell_get <- function(exp, reg) {
+  bang_cell_exp_region$Trung_binh[bang_cell_exp_region$experience_level == exp & bang_cell_exp_region$company_region == reg]
+}
+exec_na    <- cell_get("Exec", "Northern_America");   exec_row   <- cell_get("Exec", "Rest_of_World")
+senior_na  <- cell_get("Senior", "Northern_America"); senior_row <- cell_get("Senior", "Rest_of_World")
+mid_na     <- cell_get("Mid", "Northern_America");    mid_row    <- cell_get("Mid", "Rest_of_World")
+entry_na   <- cell_get("Entry", "Northern_America");  entry_row  <- cell_get("Entry", "Rest_of_World")
+
+gap_exec   <- exec_na   - exec_row
+gap_senior <- senior_na - senior_row
+gap_mid    <- mid_na    - mid_row
+gap_entry  <- entry_na  - entry_row
+
+txt_interact_note <- if (p_interact < 0.05) {
+  "Nếu chỉ xét riêng hiệu ứng chính của experience_level hoặc company_region mà bỏ qua số hạng tương tác, kết luận rút ra sẽ không phản ánh đúng bản chất dữ liệu: kết luận sẽ chỉ dừng ở \"Bắc Mỹ trả cao hơn các khu vực khác\", mà không cho thấy khoảng cách này giãn rộng rõ rệt ở cấp Exec và thu hẹp đáng kể ở cấp Entry — đúng như biểu đồ hộp ở Phần EDA đã gợi ý."
+} else {
+  "Dù khoảng cách quan sát được không hoàn toàn đều nhau giữa các cấp kinh nghiệm, kiểm định F chính thức không đủ bằng chứng để khẳng định đây là một tương tác có ý nghĩa thống kê (thay vì biến động ngẫu nhiên do một số tổ hợp nhóm có cỡ mẫu nhỏ), nên mô hình cộng tính (`m_factorial`) vẫn được giữ làm mô hình suy diễn chính cho phần này."
+}
+```
+
+Bảng và biểu đồ trên minh hoạ bản chất của tương tác: khoảng cách lương giữa Northern_America và Rest_of_World **không giống nhau** ở các cấp kinh nghiệm, cụ thể:
+
+- **Exec**: Northern_America cao hơn Rest_of_World `r fmt(gap_exec)`/năm (`r fmt(exec_na)` so với `r fmt(exec_row)`) — khoảng cách rộng nhất trong bốn cấp.
+- **Senior**: chênh lệch còn `r fmt(gap_senior)` (`r fmt(senior_na)` so với `r fmt(senior_row)`).
+- **Mid**: chênh lệch `r fmt(gap_mid)` (`r fmt(mid_na)` so với `r fmt(mid_row)`).
+- **Entry**: chênh lệch chỉ còn `r fmt(gap_entry)` (`r fmt(entry_na)` so với `r fmt(entry_row)`) — hẹp nhất, khác biệt rõ rệt so với Exec.
+
+`r txt_interact_note`
+
+### Tóm tắt Phần Đánh giá và so sánh mô hình
+
+```{r fg-summary}
+data.frame(
+  Mục    = c("Mô hình tốt nhất (RMSE thấp nhất)", "Hiệu năng trên tập kiểm định",
+             "Biến quan trọng nhất", "Biến ít quan trọng nhất",
+             "Phát hiện đáng chú ý"),
+  Kết_luận = c(
+    mo_hinh_tot_nhat,
+    paste0("RMSE ≈ ", fmt(bang_so_sanh$RMSE[1]), "; MAE ≈ ", fmt(bang_so_sanh$MAE[1]),
+           "; R² ≈ ", round(bang_so_sanh$R2[1], 3)),
+    "company_region và experience_level (nhất quán với EDA và Welch ANOVA/ANOVA Type II)",
+    "remote_ratioFullRemote, company_sizeMedium, work_year (nhất quán với LASSO và ANOVA Type II)",
+    "Ridge/LASSO chỉ cải thiện nhẹ so với OLS; OLS rút gọn (stepwise AIC) gần như không đổi so với OLS đầy đủ; biến đổi thang đo biến mục tiêu (log, Box–Cox) được khám phá thêm ở Phần Cải tiến mô hình như một hướng cải thiện khác"
+  ),
+  row.names = NULL
+) |>
+  kbl(booktabs = TRUE, caption = "Tóm tắt Phần Đánh giá và so sánh mô hình") |>
+  kable_styling(bootstrap_options = c("hover"), latex_options = c("HOLD_position"), font_size = 11) |>
+  column_spec(1, bold = TRUE, width = "4.5cm") |>
+  column_spec(2, width = "10.5cm")
+```
+
+Ba phương pháp độc lập (ANOVA Type II, LASSO, hệ số chuẩn hoá Ridge) cùng kể một câu chuyện nhất quán: **`experience_level`, `job_category` và `company_region` là ba yếu tố ảnh hưởng mạnh và ổn định nhất đến mức lương**, trong khi `work_year` và phần lớn `remote_ratio` không đóng góp thêm. Phần Cải tiến mô hình sẽ kiểm tra sâu hơn độ tin cậy của mô hình được chọn và đề xuất hướng cải thiện.

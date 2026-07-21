@@ -9,7 +9,6 @@
 main_files/
 *_files/
 *_cache/
-main.pdf
 main.html
 *.tex
 
