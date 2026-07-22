@@ -1583,3 +1583,760 @@ pred_train_ridge <- predict(ridge_model,newx = x_train_scaled,s = lambda_ridge_m
 pred_test_ridge <- predict(ridge_model,newx = x_test_scaled,s = lambda_ridge_min) %>%as.numeric()
 ```
 
+## Mô hình phi tham số
+
+### Chuẩn bị dữ liệu
+
+```{r}
+# Các biến giải thích dùng chung cho mô hình cây
+tree_predictors <- c("season","yr","mnth","hr","weekday","workingday","weathersit","temp","hum","windspeed")
+categorical_vars <- c("season","yr","mnth","hr","weekday","workingday","weathersit")
+
+# Chỉ giữ biến mục tiêu và các biến giải thích cần thiết
+tree_train <- train_data %>%
+  dplyr::select(
+    cnt,
+    dplyr::all_of(tree_predictors)
+  ) %>%
+  as.data.frame()
+
+tree_test <- test_data %>%
+  dplyr::select(
+    cnt,
+    dplyr::all_of(tree_predictors)
+  ) %>%
+  as.data.frame()
+
+# Đảm bảo các biến phân loại có cùng levels giữa train và test
+for (var in categorical_vars) {
+  tree_train[[var]] <- factor(tree_train[[var]])
+
+  tree_test[[var]] <- factor(
+    tree_test[[var]],
+    levels = levels(tree_train[[var]])
+  )
+}
+
+# Kiểm tra có mức mới trong test hay không
+if (anyNA(tree_test[categorical_vars])) {
+  stop(
+    "Tập test có mức phân loại không xuất hiện trong tập train."
+  )
+}
+
+# Chia một phần tập train để lựa chọn siêu tham số
+# Tập test cuối cùng vẫn được giữ nguyên
+set.seed(743)
+
+fit_index <- caret::createDataPartition(
+  tree_train$cnt,
+  p = 0.8,
+  list = FALSE
+)
+
+ml_fit <- tree_train[fit_index, ]
+ml_valid <- tree_train[-fit_index, ]
+
+dim(ml_fit)
+dim(ml_valid)
+dim(tree_test)
+```
+
+### Randome forest
+#### Tuning Random Forest
+
+```{r}
+library(ranger)
+
+evaluate_model <- function(
+  actual,
+  predicted,
+  model_name,
+  dataset_name
+) {
+  tibble::tibble(
+    Mo_hinh = model_name,
+    Tap_du_lieu = dataset_name,
+    RMSE = sqrt(mean((actual - predicted)^2, na.rm = TRUE)),
+    MAE = mean(abs(actual - predicted), na.rm = TRUE),
+    R2 = 1 -
+      sum((actual - predicted)^2, na.rm = TRUE) /
+      sum((actual - mean(actual, na.rm = TRUE))^2, na.rm = TRUE)
+  )
+}
+
+rf_formula <- stats::as.formula(
+  paste(
+    "cnt ~",
+    paste(tree_predictors, collapse = " + ")
+  )
+)
+
+# Lưới siêu tham số
+rf_grid <- expand.grid(
+  mtry = c(3, 5, 7, 10),
+  min.node.size = c(5, 15, 30)
+)
+
+rf_tuning_list <- vector(
+  mode = "list",
+  length = nrow(rf_grid)
+)
+
+for (i in seq_len(nrow(rf_grid))) {
+
+  rf_model_i <- ranger::ranger(
+    formula = rf_formula,
+    data = ml_fit,
+    num.trees = 400,
+    mtry = rf_grid$mtry[i],
+    min.node.size = rf_grid$min.node.size[i],
+    sample.fraction = 0.8,
+    replace = TRUE,
+    respect.unordered.factors = "order",
+    importance = "none",
+    num.threads = max(
+      1,
+      parallel::detectCores() - 1
+    ),
+    seed = 743 + i
+  )
+
+  pred_valid_i <- predict(
+    rf_model_i,
+    data = ml_valid
+  )$predictions
+
+  metric_i <- evaluate_model(
+    actual = ml_valid$cnt,
+    predicted = pred_valid_i,
+    model_name = "Random Forest",
+    dataset_name = "Validation"
+  )
+
+  rf_tuning_list[[i]] <- tibble(
+    mtry = rf_grid$mtry[i],
+    min_node_size = rf_grid$min.node.size[i],
+    RMSE = metric_i$RMSE,
+    MAE = metric_i$MAE,
+    R2 = metric_i$R2
+  )
+}
+
+rf_tuning_results <- dplyr::bind_rows(
+  rf_tuning_list
+) %>%
+  dplyr::arrange(RMSE)
+
+knitr::kable(
+  rf_tuning_results,
+  digits = 4,
+  caption = "Lựa chọn siêu tham số cho Random Forest"
+)
+```
+
+#### Chọn cấu hình tốt nhất
+
+```{r}
+best_rf_params <- rf_tuning_results %>%
+  dplyr::slice_min(
+    order_by = RMSE,
+    n = 1,
+    with_ties = FALSE
+  )
+
+best_rf_params
+```
+#### Train lại trên tập train
+```{r}
+set.seed(743)
+
+rf_final <- ranger::ranger(
+  formula = rf_formula,
+  data = tree_train,
+  num.trees = 1000,
+  mtry = best_rf_params$mtry[[1]],
+  min.node.size = best_rf_params$min_node_size[[1]],
+  sample.fraction = 0.8,
+  replace = TRUE,
+  respect.unordered.factors = "order",
+  importance = "permutation",
+  num.threads = max(
+    1,
+    parallel::detectCores() - 1
+  ),
+  seed = 743
+)
+
+rf_final
+```
+#### Dự báo và đánh giá
+```{r}
+pred_train_rf <- predict(
+  rf_final,
+  data = tree_train
+)$predictions
+
+pred_test_rf <- predict(
+  rf_final,
+  data = tree_test
+)$predictions
+
+rf_results <- dplyr::bind_rows(
+  evaluate_model(
+    actual = tree_train$cnt,
+    predicted = pred_train_rf,
+    model_name = "Random Forest",
+    dataset_name = "Train"
+  ),
+  evaluate_model(
+    actual = tree_test$cnt,
+    predicted = pred_test_rf,
+    model_name = "Random Forest",
+    dataset_name = "Test"
+  )
+)
+
+knitr::kable(
+  rf_results,
+  digits = 4,
+  caption = "Kết quả đánh giá mô hình Random Forest"
+)
+```
+
+```{r}
+pred_train_rf <- predict(
+  rf_final,
+  data = tree_train
+)$predictions
+
+pred_test_rf <- predict(
+  rf_final,
+  data = tree_test
+)$predictions
+
+rf_results <- dplyr::bind_rows(
+  evaluate_model(
+    actual = tree_train$cnt,
+    predicted = pred_train_rf,
+    model_name = "Random Forest",
+    dataset_name = "Train"
+  ),
+  evaluate_model(
+    actual = tree_test$cnt,
+    predicted = pred_test_rf,
+    model_name = "Random Forest",
+    dataset_name = "Test"
+  )
+)
+
+knitr::kable(
+  rf_results,
+  digits = 4,
+  caption = "Kết quả đánh giá mô hình Random Forest"
+)
+```
+
+#### Important value
+```{r}
+rf_importance <- tibble(
+  Bien = names(rf_final$variable.importance),
+  Do_quan_trong = as.numeric(
+    rf_final$variable.importance
+  )
+) %>%
+  dplyr::arrange(
+    dplyr::desc(Do_quan_trong)
+  )
+
+knitr::kable(
+  rf_importance,
+  digits = 4,
+  caption = "Độ quan trọng của các biến trong Random Forest"
+)
+
+ggplot(
+  rf_importance,
+  aes(
+    x = reorder(Bien, Do_quan_trong),
+    y = Do_quan_trong
+  )
+) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    title = "Độ quan trọng của biến trong Random Forest",
+    x = NULL,
+    y = "Permutation importance"
+  ) +
+  theme_minimal()
+```
+
+### Mô hình CatBoost
+
+CatBoost là phương pháp gradient boosting trên cây quyết định, có khả năng xử lý trực tiếp các biến phân loại mà không cần mã hóa one-hot. Mô hình có thể phát hiện các quan hệ phi tuyến và hiệu ứng tương tác giữa các biến, do đó được sử dụng để so sánh với các mô hình tuyến tính và điều chuẩn đã xây dựng trước đó.
+
+#### Chuẩn bị dữ liệu cho CatBoost
+
+```{r catboost-data}
+
+#install.packages("remotes")
+
+#remotes::install_url(
+#  "https://github.com/catboost/catboost/releases/download/v1.2.10/catboost-R-windows-x86_64-1.2.10.tgz",
+#  INSTALL_opts = c("--no-multiarch", "--no-test-load")
+#)
+
+library(catboost)
+
+# Các biến giải thích được sử dụng trong mô hình
+catboost_predictors <- c(
+  "season",
+  "yr",
+  "mnth",
+  "hr",
+  "weekday",
+  "workingday",
+  "weathersit",
+  "temp",
+  "hum",
+  "windspeed"
+)
+
+# Các biến phân loại
+catboost_categorical <- c(
+  "season",
+  "yr",
+  "mnth",
+  "hr",
+  "weekday",
+  "workingday",
+  "weathersit"
+)
+
+# Tạo dữ liệu train và test riêng cho CatBoost
+catboost_train <- train_data %>%
+  dplyr::select(
+    cnt,
+    dplyr::all_of(catboost_predictors)
+  ) %>%
+  as.data.frame()
+
+catboost_test <- test_data %>%
+  dplyr::select(
+    cnt,
+    dplyr::all_of(catboost_predictors)
+  ) %>%
+  as.data.frame()
+
+# Đảm bảo các biến phân loại có cùng levels giữa train và test
+for (var in catboost_categorical) {
+
+  train_levels <- levels(
+    factor(catboost_train[[var]])
+  )
+
+  catboost_train[[var]] <- factor(
+    catboost_train[[var]],
+    levels = train_levels
+  )
+
+  catboost_test[[var]] <- factor(
+    catboost_test[[var]],
+    levels = train_levels
+  )
+}
+
+# Kiểm tra tập test có mức phân loại mới hay không
+if (anyNA(catboost_test[catboost_categorical])) {
+  stop(
+    "Tập test có mức phân loại không xuất hiện trong tập train."
+  )
+}
+
+# Xác định số lõi xử lý
+n_threads <- parallel::detectCores(logical = TRUE)
+
+if (is.na(n_threads)) {
+  n_threads <- 1L
+} else {
+  n_threads <- max(1L, n_threads - 1L)
+}
+
+dim(catboost_train)
+dim(catboost_test)
+```
+
+CatBoost không sử dụng trực tiếp tập kiểm định cuối cùng để lựa chọn siêu tham số. Thay vào đó, tập huấn luyện tiếp tục được chia thành tập xây dựng mô hình và tập validation. Tập validation được dùng để theo dõi RMSE và lựa chọn số cây phù hợp thông qua cơ chế early stopping.
+
+#### Chia tập huấn luyện thành tập xây dựng và validation
+
+```{r catboost-validation-split}
+set.seed(743)
+
+catboost_fit_index <- caret::createDataPartition(
+  catboost_train$cnt,
+  p = 0.8,
+  list = FALSE
+)
+
+catboost_fit <- catboost_train[
+  catboost_fit_index,
+]
+
+catboost_validation <- catboost_train[
+  -catboost_fit_index,
+]
+
+dim(catboost_fit)
+dim(catboost_validation)
+```
+
+#### Tạo dữ liệu Pool cho CatBoost
+
+Các biến phân loại được giữ ở dạng `factor`. Khi dữ liệu đầu vào là `data.frame`, CatBoost sẽ tự động nhận diện các cột factor là biến phân loại.
+
+```{r catboost-pool}
+# Pool dùng để lựa chọn số cây
+pool_catboost_fit <- catboost.load_pool(
+  data = catboost_fit %>%
+    dplyr::select(
+      dplyr::all_of(catboost_predictors)
+    ),
+  label = catboost_fit$cnt
+)
+
+pool_catboost_validation <- catboost.load_pool(
+  data = catboost_validation %>%
+    dplyr::select(
+      dplyr::all_of(catboost_predictors)
+    ),
+  label = catboost_validation$cnt
+)
+
+# Pool dùng để huấn luyện mô hình cuối cùng
+pool_catboost_train <- catboost.load_pool(
+  data = catboost_train %>%
+    dplyr::select(
+      dplyr::all_of(catboost_predictors)
+    ),
+  label = catboost_train$cnt
+)
+
+# Pool dùng để đánh giá trên tập test
+pool_catboost_test <- catboost.load_pool(
+  data = catboost_test %>%
+    dplyr::select(
+      dplyr::all_of(catboost_predictors)
+    ),
+  label = catboost_test$cnt
+)
+```
+
+#### Lựa chọn số cây bằng early stopping
+
+Mô hình được thiết lập với tối đa 2.000 cây. Cơ chế early stopping sẽ dừng quá trình huấn luyện nếu RMSE trên tập validation không được cải thiện trong 100 vòng liên tiếp. Tham số `use_best_model = TRUE` giúp chỉ giữ lại số cây tương ứng với kết quả validation tốt nhất.
+
+```{r catboost-select}
+catboost_params_select <- list(
+  loss_function = "RMSE",
+  eval_metric = "RMSE",
+
+  # Số cây tối đa
+  iterations = 2000,
+
+  # Tốc độ học
+  learning_rate = 0.03,
+
+  # Độ sâu của cây
+  depth = 8,
+
+  # Điều chuẩn
+  l2_leaf_reg = 5,
+
+  # Tăng tính ngẫu nhiên để hạn chế overfitting
+  random_strength = 1,
+  bootstrap_type = "Bayesian",
+  bagging_temperature = 1,
+
+  # Early stopping
+  od_type = "Iter",
+  od_wait = 100,
+  use_best_model = TRUE,
+
+  random_seed = 743,
+  thread_count = n_threads,
+
+  # Không tạo thư mục catboost_info
+  allow_writing_files = FALSE,
+
+  # In kết quả sau mỗi 100 vòng
+  verbose = 100
+)
+
+set.seed(743)
+
+catboost_select <- catboost.train(
+  learn_pool = pool_catboost_fit,
+  test_pool = pool_catboost_validation,
+  params = catboost_params_select
+)
+
+catboost_select
+```
+
+#### Kết quả trên tập validation
+
+```{r catboost-validation-result}
+pred_validation_catboost <- catboost.predict(
+  model = catboost_select,
+  pool = pool_catboost_validation
+)
+
+catboost_validation_result <- evaluate_model(
+  actual = catboost_validation$cnt,
+  predicted = pred_validation_catboost,
+  model_name = "CatBoost",
+  dataset_name = "Validation"
+)
+
+knitr::kable(
+  catboost_validation_result,
+  digits = 4,
+  caption = "Kết quả CatBoost trên tập validation"
+)
+```
+
+#### Xác định số cây tối ưu
+
+```{r catboost-best-trees}
+best_catboost_trees <- catboost_select$tree_count
+
+best_catboost_trees
+```
+
+Số cây trên được xác định hoàn toàn từ tập huấn luyện và tập validation, không sử dụng thông tin từ tập test cuối cùng.
+
+#### Huấn luyện mô hình CatBoost cuối cùng
+
+Sau khi xác định số cây phù hợp, mô hình được huấn luyện lại trên toàn bộ tập huấn luyện.
+
+```{r catboost-final-model}
+catboost_params_final <- list(
+  loss_function = "RMSE",
+  eval_metric = "RMSE",
+
+  # Sử dụng số cây đã chọn từ tập validation
+  iterations = best_catboost_trees,
+
+  learning_rate = 0.03,
+  depth = 8,
+  l2_leaf_reg = 5,
+
+  random_strength = 1,
+  bootstrap_type = "Bayesian",
+  bagging_temperature = 1,
+
+  random_seed = 743,
+  thread_count = n_threads,
+
+  # Không dùng early stopping ở mô hình cuối
+  use_best_model = FALSE,
+
+  allow_writing_files = FALSE,
+  verbose = 100
+)
+
+set.seed(743)
+
+catboost_final <- catboost.train(
+  learn_pool = pool_catboost_train,
+  params = catboost_params_final
+)
+
+catboost_final
+```
+
+#### Dự báo bằng mô hình CatBoost
+
+```{r catboost-prediction}
+pred_train_catboost <- catboost.predict(
+  model = catboost_final,
+  pool = pool_catboost_train
+)
+
+pred_test_catboost <- catboost.predict(
+  model = catboost_final,
+  pool = pool_catboost_test
+)
+```
+
+#### Đánh giá mô hình CatBoost
+
+```{r catboost-evaluation}
+catboost_results <- dplyr::bind_rows(
+  evaluate_model(
+    actual = catboost_train$cnt,
+    predicted = pred_train_catboost,
+    model_name = "CatBoost",
+    dataset_name = "Train"
+  ),
+  evaluate_model(
+    actual = catboost_test$cnt,
+    predicted = pred_test_catboost,
+    model_name = "CatBoost",
+    dataset_name = "Test"
+  )
+)
+
+knitr::kable(
+  catboost_results,
+  digits = 4,
+  caption = "Kết quả đánh giá mô hình CatBoost"
+)
+```
+
+#### So sánh giá trị thực tế và giá trị dự báo
+
+```{r catboost-actual-predicted}
+catboost_prediction_data <- tibble::tibble(
+  Thuc_te = catboost_test$cnt,
+  Du_bao = as.numeric(pred_test_catboost)
+)
+
+ggplot(
+  catboost_prediction_data,
+  aes(
+    x = Thuc_te,
+    y = Du_bao
+  )
+) +
+  geom_point(
+    alpha = 0.25,
+    size = 1.2
+  ) +
+  geom_abline(
+    intercept = 0,
+    slope = 1,
+    linetype = "dashed"
+  ) +
+  labs(
+    title = "Giá trị thực tế và dự báo của CatBoost",
+    subtitle = "Đường nét đứt biểu diễn trường hợp dự báo hoàn hảo",
+    x = "Số lượt thuê thực tế",
+    y = "Số lượt thuê dự báo"
+  ) +
+  theme_minimal()
+```
+
+Các điểm càng nằm gần đường chéo thì giá trị dự báo của mô hình càng gần với giá trị thực tế. Sự phân tán của các điểm quanh đường chéo thể hiện mức sai số dự báo của mô hình.
+
+#### Phân phối phần dư của CatBoost
+
+```{r catboost-residuals}
+catboost_residual_data <- tibble::tibble(
+  Du_bao = as.numeric(pred_test_catboost),
+  Phan_du = catboost_test$cnt -
+    as.numeric(pred_test_catboost)
+)
+
+ggplot(
+  catboost_residual_data,
+  aes(
+    x = Du_bao,
+    y = Phan_du
+  )
+) +
+  geom_point(
+    alpha = 0.25,
+    size = 1.2
+  ) +
+  geom_hline(
+    yintercept = 0,
+    linetype = "dashed"
+  ) +
+  labs(
+    title = "Phần dư của mô hình CatBoost trên tập test",
+    x = "Giá trị dự báo",
+    y = "Phần dư"
+  ) +
+  theme_minimal()
+```
+
+Đối với mô hình học máy, biểu đồ phần dư chủ yếu được sử dụng để kiểm tra liệu mô hình có xu hướng dự báo thiếu hoặc dự báo vượt ở một vùng giá trị nhất định hay không, thay vì kiểm định các giả định phân phối như trong mô hình OLS.
+
+#### Độ quan trọng của các biến
+
+```{r catboost-importance}
+catboost_importance <- tibble::tibble(
+  Bien = catboost_predictors,
+  Do_quan_trong = as.numeric(
+    catboost_final$feature_importances
+  )
+) %>%
+  dplyr::arrange(
+    dplyr::desc(Do_quan_trong)
+  )
+
+knitr::kable(
+  catboost_importance,
+  digits = 4,
+  caption = "Độ quan trọng của các biến trong mô hình CatBoost"
+)
+```
+
+```{r catboost-importance-plot}
+ggplot(
+  catboost_importance,
+  aes(
+    x = reorder(Bien, Do_quan_trong),
+    y = Do_quan_trong
+  )
+) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    title = "Độ quan trọng của các biến trong CatBoost",
+    x = NULL,
+    y = "Mức độ quan trọng"
+  ) +
+  theme_minimal()
+```
+
+**Nhận xét:** Mức độ quan trọng của biến phản ánh mức đóng góp tương đối của từng biến vào sự thay đổi giá trị dự báo của mô hình. Biến có độ quan trọng cao hơn được CatBoost sử dụng nhiều hơn trong việc cải thiện khả năng dự báo. Tuy nhiên, chỉ số này không thể hiện chiều tác động dương hoặc âm như hệ số hồi quy của mô hình OLS.
+
+### So sánh 2 mô hình
+
+```{r}
+ai_results <- dplyr::bind_rows(
+  rf_results,
+  catboost_results
+) %>%
+  dplyr::arrange(Tap_du_lieu, RMSE)
+
+knitr::kable(
+  ai_results,
+  digits = 4,
+  caption = "So sánh kết quả Random Forest và CatBoost"
+)
+
+ai_test_results <- ai_results %>%
+  dplyr::filter(Tap_du_lieu == "Test") %>%
+  dplyr::arrange(RMSE)
+
+best_ai_model <- ai_test_results %>%
+  dplyr::slice_head(n = 1)
+```
+
+### Nhận xét chung về Random Forest và CatBoost
+
+Trên tập kiểm định, mô hình Random Forest đạt RMSE bằng `r round(rf_results$RMSE[rf_results$Tap_du_lieu == "Test"], 4)`, MAE bằng `r round(rf_results$MAE[rf_results$Tap_du_lieu == "Test"], 4)` và (R^2) bằng `r round(rf_results$R2[rf_results$Tap_du_lieu == "Test"], 4)`. Trong khi đó, mô hình CatBoost đạt RMSE bằng `r round(catboost_results$RMSE[catboost_results$Tap_du_lieu == "Test"], 4)`, MAE bằng `r round(catboost_results$MAE[catboost_results$Tap_du_lieu == "Test"], 4)` và (R^2) bằng `r round(catboost_results$R2[catboost_results$Tap_du_lieu == "Test"], 4)`.
+
+Xét theo RMSE trên tập kiểm định, mô hình `r best_ai_model$Mo_hinh` cho kết quả dự báo tốt hơn trong hai mô hình, với RMSE thấp nhất bằng `r round(best_ai_model$RMSE, 4)`. Kết quả này cho thấy các mô hình dựa trên cây có khả năng nắm bắt các quan hệ phi tuyến và hiệu ứng tương tác giữa thời gian, mùa vụ và điều kiện thời tiết mà các mô hình hồi quy tuyến tính có thể chưa phản ánh đầy đủ.
+
+Sự chênh lệch giữa kết quả trên tập huấn luyện và tập kiểm định được sử dụng để đánh giá sơ bộ khả năng khái quát hóa của mô hình. Nếu sai số trên tập huấn luyện thấp hơn đáng kể so với tập kiểm định, mô hình có thể có dấu hiệu quá khớp; ngược lại, mức chênh lệch nhỏ cho thấy khả năng dự báo trên dữ liệu mới tương đối ổn định.
+
+Kết quả độ quan trọng của biến cho biết các yếu tố thời gian, đặc biệt là giờ trong ngày, cùng với năm, nhiệt độ và điều kiện thời tiết có đóng góp đáng kể vào dự báo nhu cầu thuê xe. Tuy nhiên, độ quan trọng của biến chỉ phản ánh mức đóng góp tương đối trong mô hình, không thể hiện chiều tác động dương hoặc âm và không được diễn giải như quan hệ nhân quả.
+
+
+
