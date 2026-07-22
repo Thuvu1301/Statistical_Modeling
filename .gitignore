@@ -20,3 +20,5 @@ main.html
 # macOS
 .DS_Store
 .vscode/
+catboost_info
+.claude
