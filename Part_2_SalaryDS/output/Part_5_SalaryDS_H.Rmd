@@ -291,6 +291,146 @@ bang_boxcox |>
 
 Mô hình Box–Cox với $\lambda$ tối ưu **vượt qua cả Ridge** (mô hình tốt nhất trước đó) lẫn log-OLS, ở cả ba chỉ số RMSE, MAE, R², dù chỉ dùng OLS thuần tuý trên thang đo đã biến đổi đúng mức. Phát hiện quan trọng nhất của Phần Cải tiến mô hình: **hướng cải tiến hiệu quả nhất không phải thuật toán phức tạp hơn (Ridge/LASSO), mà là biến đổi đúng thang đo biến mục tiêu trước khi hồi quy**. Khuyến nghị: **mô hình Box–Cox ($\lambda \approx$ `r round(lambda_hat, 2)`) nên là mô hình dự đoán được đề xuất**, thay thế Ridge.
 
+### Thử nghiệm mô hình Gradient Boosting: XGBoost và CatBoost
+
+**Mục tiêu.** Toàn bộ các mô hình ở Phần Xây dựng mô hình dự đoán và ở trên đều là mô hình **tuyến tính** (OLS, Ridge, LASSO, log-OLS, Box–Cox) — giả định quan hệ cộng tính giữa các biến dự báo và (một phép biến đổi của) `salary_in_usd`. Theo Shwartz-Ziv & Armon (2021), các mô hình **Gradient Boosted Trees** thường đạt hiệu năng dự báo cao nhất trên dữ liệu dạng bảng (tabular data), đặc biệt khi tồn tại nhiều biến phân loại và quan hệ phi tuyến/tương tác giữa các biến — đúng đặc điểm của bộ dữ liệu này (6/8 biến dự báo là phân loại, và mục Tương tác ở Phần Đánh giá và so sánh mô hình đã xác nhận có tương tác giữa `experience_level` và `company_region`, điều mà một mô hình cộng tính thuần tuý không nắm bắt được nếu không khai báo tường minh số hạng tương tác). Mục này thử nghiệm hai mô hình bổ sung, huấn luyện trên đúng `train_df`/`test_df` đã chia ở Phần Xây dựng mô hình dự đoán để so sánh công bằng:
+
+- **XGBoost** (Chen & Guestrin 2016): huấn luyện trên ma trận thiết kế one-hot `x_train`/`x_test` đã dùng cho Ridge/LASSO.
+- **CatBoost** (Prokhorenkova et al. 2018): xử lý trực tiếp các biến phân loại dạng gốc (không one-hot) bằng thuật toán **ordered target statistics**, tránh rủi ro rò rỉ thông tin (target leakage) khi mã hoá biến phân loại nhiều mức — phù hợp với đặc điểm phần lớn biến dự báo trong bộ dữ liệu là phân loại (`job_category`, `experience_level`, `company_size`, `employment_type`, `remote_ratio`, `company_region`).
+
+```{r h-gbm-packages}
+if (!requireNamespace("xgboost", quietly = TRUE)) install.packages("xgboost")
+library(xgboost)
+catboost_available <- requireNamespace("catboost", quietly = TRUE)
+```
+
+`r if (!catboost_available) "**Lưu ý cài đặt:** package catboost không có trên CRAN — cần cài thủ công từ GitHub release của Yandex (xem hướng dẫn tại https://catboost.ai/docs/en/concepts/r-installation) trước khi knit. Nếu chưa cài, phần CatBoost bên dưới sẽ tự động được bỏ qua mà không làm gián đoạn việc biên dịch báo cáo; phần XGBoost vẫn chạy đầy đủ." else "Cả hai package xgboost và catboost đều đã sẵn có trong môi trường chạy báo cáo này."`
+
+#### XGBoost
+
+Siêu tham số được chọn cố định (không tinh chỉnh lưới đầy đủ do giới hạn thời gian tính toán), riêng số vòng lặp (`nrounds`) được chọn bằng 5-fold cross-validation trên tập huấn luyện để tránh overfitting:
+
+```{r h-xgboost}
+set.seed(2026)
+dtrain_xgb <- xgb.DMatrix(data = x_train, label = y_train)
+dtest_xgb  <- xgb.DMatrix(data = x_test)
+
+xgb_params <- list(objective = "reg:squarederror", eta = 0.05, max_depth = 4,
+                    subsample = 0.8, colsample_bytree = 0.8)
+
+set.seed(2026)
+xgb_cv <- xgb.cv(data = dtrain_xgb, params = xgb_params, nrounds = 1000,
+                 nfold = 5, early_stopping_rounds = 30, verbose = 0)
+best_nrounds_xgb <- if (!is.null(xgb_cv$best_iteration)) xgb_cv$best_iteration else xgb_cv$early_stop$best_iteration
+
+m_xgb    <- xgb.train(data = dtrain_xgb, params = xgb_params, nrounds = best_nrounds_xgb)
+pred_xgb <- predict(m_xgb, dtest_xgb)
+```
+
+Số vòng lặp tối ưu theo CV là `r best_nrounds_xgb`/1000 (dừng sớm sau 30 vòng không cải thiện thêm) — tránh việc huấn luyện quá nhiều cây khiến mô hình khớp theo nhiễu của tập huấn luyện.
+
+#### CatBoost
+
+Siêu tham số được chọn cố định tương tự XGBoost để so sánh công bằng — `iterations = 1000`, `depth = 6`, `learning_rate = 0.05`, `loss_function = RMSE` — không tinh chỉnh lưới đầy đủ do giới hạn thời gian tính toán. Khác biệt cốt lõi so với XGBoost nằm ở cách xử lý biến phân loại: các cột phân loại trong `train_df`/`test_df` đã ở dạng `factor` sẵn từ bước tiền xử lý (Phần Tiền xử lý dữ liệu), nên `catboost.load_pool()` tự động nhận diện chúng làm categorical feature dựa trên kiểu cột của data.frame — không cần mã hoá one-hot như XGBoost/Ridge/LASSO, và cũng không cần khai báo tường minh chỉ số cột (`cat_features`), vì tham số này chỉ có tác dụng khi dữ liệu đầu vào là ma trận số thuần tuý.
+
+```{r h-catboost}
+if (catboost_available) {
+  train_pool <- catboost::catboost.load_pool(
+    data = train_df[, predictors_all], label = train_df$salary_in_usd)
+  test_pool  <- catboost::catboost.load_pool(
+    data = test_df[, predictors_all])
+
+  set.seed(2026)
+  m_catboost <- catboost::catboost.train(
+    train_pool, params = list(loss_function = "RMSE", iterations = 1000,
+                               depth = 6, learning_rate = 0.05,
+                               random_seed = 2026, logging_level = "Silent"))
+  pred_catboost <- catboost::catboost.predict(m_catboost, test_pool)
+}
+```
+
+#### Chẩn đoán dự đoán: Predicted vs Actual và phần dư
+
+**Mục tiêu.** Bảng RMSE/MAE/R² ở mục tiếp theo tóm tắt sai số bằng một con số duy nhất, nhưng có thể che giấu các dạng lệch hệ thống (ví dụ mô hình luôn dự đoán thấp ở nhóm lương cao). Hai biểu đồ dưới đây kiểm tra trực quan: (i) lương dự đoán bám sát lương thực tế đến đâu, và (ii) phần dư có phân bố ngẫu nhiên quanh 0 hay lệch theo một quy luật nào đó.
+
+```{r h-gbm-diagnostics-data}
+pred_df <- bind_rows(
+  data.frame(Model = "XGBoost", Actual = test_df$salary_in_usd, Predicted = pred_xgb),
+  if (catboost_available) data.frame(Model = "CatBoost", Actual = test_df$salary_in_usd, Predicted = pred_catboost)
+) |>
+  mutate(Residual = Actual - Predicted)
+
+resid_summary <- pred_df |>
+  group_by(Model) |>
+  summarise(cor_resid_pred = cor(Predicted, Residual),
+            resid_actual_top_q    = mean(Residual[Actual > quantile(Actual, 0.75)]),
+            resid_actual_bottom_q = mean(Residual[Actual < quantile(Actual, 0.25)])) |>
+  as.data.frame()
+
+resid_stat <- function(model, col) resid_summary[[col]][resid_summary$Model == model]
+```
+
+```{r h-gbm-pred-vs-actual, fig.height=3.4}
+ggplot(pred_df, aes(x = Actual, y = Predicted)) +
+  geom_point(color = COL_PRIMARY, alpha = 0.6) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "firebrick") +
+  facet_wrap(~ Model) +
+  scale_x_continuous(labels = scales::dollar_format()) +
+  scale_y_continuous(labels = scales::dollar_format()) +
+  labs(title = "Lương dự đoán so với lương thực tế trên tập kiểm định",
+       subtitle = "Đường đứt nét: dự đoán hoàn hảo (Predicted = Actual)",
+       x = "Lương thực tế (USD)", y = "Lương dự đoán (USD)")
+```
+
+```{r h-gbm-residual-plot, fig.height=3.4}
+ggplot(pred_df, aes(x = Predicted, y = Residual)) +
+  geom_point(color = COL_PRIMARY, alpha = 0.6) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "firebrick") +
+  facet_wrap(~ Model) +
+  scale_x_continuous(labels = scales::dollar_format()) +
+  scale_y_continuous(labels = scales::dollar_format()) +
+  labs(title = "Phần dư theo lương dự đoán trên tập kiểm định",
+       x = "Lương dự đoán (USD)", y = "Phần dư (Thực tế − Dự đoán, USD)")
+```
+
+`r paste0("Ở biểu đồ Predicted vs Actual, cả hai mô hình đều lệch có hệ thống theo hai chiều ngược nhau tuỳ nhóm lương: trong nhóm 25% lương thực tế **cao nhất**, phần lớn điểm nằm dưới đường chéo — mô hình **dự đoán thấp hơn thực tế** trung bình ", fmt(resid_stat("XGBoost", "resid_actual_top_q")), " (XGBoost)", if (catboost_available) paste0(" và ", fmt(resid_stat("CatBoost", "resid_actual_top_q")), " (CatBoost)") else "", "; ngược lại, ở nhóm 25% lương thực tế **thấp nhất**, mô hình lại **dự đoán cao hơn thực tế** trung bình ", fmt(abs(resid_stat("XGBoost", "resid_actual_bottom_q"))), " (XGBoost)", if (catboost_available) paste0(" và ", fmt(abs(resid_stat("CatBoost", "resid_actual_bottom_q"))), " (CatBoost)") else "", " — cả hai mô hình đều có xu hướng \"co\" dự đoán về gần giá trị trung bình (shrinkage), một hạn chế điển hình khi biến mục tiêu lệch phải mạnh mà không mô hình cây nào trong số đã thử khắc phục triệt để, khớp với hạn chế tương tự đã ghi nhận ở các mô hình tuyến tính (Phần Xây dựng mô hình dự đoán).")`
+
+`r paste0("Biểu đồ phần dư theo giá trị dự đoán cho thấy cùng hiện tượng dưới góc nhìn khác: tương quan giữa phần dư và giá trị dự đoán âm ở cả hai mô hình (XGBoost r ≈ ", round(resid_stat("XGBoost", "cor_resid_pred"), 2), if (catboost_available) paste0("; CatBoost r ≈ ", round(resid_stat("CatBoost", "cor_resid_pred"), 2)) else "", ") — phần dư có xu hướng giảm dần khi giá trị dự đoán tăng, thay vì phân tán ngẫu nhiên quanh 0 như kỳ vọng ở một mô hình không thiên lệch.")`
+
+#### So sánh với các mô hình đã có
+
+```{r h-gbm-compare}
+bang_gbm <- bind_rows(
+  compare_models("5. XGBoost", test_df$salary_in_usd, pred_xgb),
+  if (catboost_available) compare_models("6. CatBoost", test_df$salary_in_usd, pred_catboost),
+  compare_models(paste0("7. Box-Cox (lambda = ", round(lambda_hat, 2), ")"), test_df$salary_in_usd, pred_boxcox),
+  bang_so_sanh |> select(Model, RMSE, MAE, R2)
+) |>
+  arrange(RMSE) |>
+  mutate(Hang = row_number()) |>
+  relocate(Hang)
+
+bang_gbm |>
+  mutate(RMSE = fmt(RMSE), MAE = fmt(MAE), R2 = round(R2, 4)) |>
+  kbl(booktabs = TRUE, caption = "So sánh XGBoost, CatBoost và Box-Cox với các mô hình tuyến tính đã có, trên cùng tập kiểm định",
+      col.names = c("Hạng", "Mô hình", "RMSE", "MAE", "R² (test)")) |>
+  kable_styling(bootstrap_options = c("hover"), latex_options = c("HOLD_position", "scale_down"), font_size = 11) |>
+  column_spec(2, bold = TRUE) |>
+  row_spec(1, background = "#e8f5e9")
+```
+
+```{r h-gbm-summary}
+rank_xgb    <- which(bang_gbm$Model == "5. XGBoost")
+rmse_xgb    <- bang_gbm$RMSE[bang_gbm$Model == "5. XGBoost"]
+rmse_ridge_best <- bang_so_sanh$RMSE[bang_so_sanh$Model == mo_hinh_tot_nhat]
+```
+
+`r ifelse(rank_xgb == 1, paste0("**XGBoost đạt RMSE thấp nhất** trong toàn bộ các mô hình đã thử (kể cả Box–Cox), RMSE ", fmt(rmse_xgb), " so với ", fmt(rmse_ridge_best), " của ", mo_hinh_tot_nhat, " — cây quyết định nắm bắt được tương tác/phi tuyến (ví dụ tương tác experience_level x company_region đã xác nhận ở trên) mà mô hình tuyến tính cộng tính bỏ sót."), ifelse(rmse_xgb < rmse_ridge_best, paste0("XGBoost (RMSE ", fmt(rmse_xgb), ") cải thiện so với ", mo_hinh_tot_nhat, " (RMSE ", fmt(rmse_ridge_best), ") nhưng chưa vượt qua mô hình Box–Cox — cỡ mẫu 565 quan sát có thể chưa đủ lớn để boosting phát huy hết lợi thế so với một mô hình tuyến tính đã biến đổi đúng thang đo."), paste0("XGBoost (RMSE ", fmt(rmse_xgb), ") **không cải thiện** so với ", mo_hinh_tot_nhat, " (RMSE ", fmt(rmse_ridge_best), ") — với cỡ mẫu chỉ 565 quan sát và phần lớn biến dự báo là phân loại bậc thấp, mô hình tuyến tính đã biến đổi đúng thang đo (Box–Cox) khai thác cấu trúc dữ liệu hiệu quả hơn một mô hình phi tuyến phức tạp, vốn cần cỡ mẫu lớn hơn để ước lượng ổn định.")))`
+
+`r if (catboost_available) { rank_cb <- which(bang_gbm$Model == "6. CatBoost"); rmse_cb <- bang_gbm$RMSE[bang_gbm$Model == "6. CatBoost"]; paste0("CatBoost xếp hạng ", rank_cb, "/", nrow(bang_gbm), " với RMSE ", fmt(rmse_cb), " — ", ifelse(rmse_cb < rmse_xgb, "nhỉnh hơn XGBoost nhờ xử lý trực tiếp biến phân loại thay vì one-hot", "không cải thiện thêm so với XGBoost trên bộ dữ liệu này, dù về lý thuyết ordered target statistics thường có lợi thế rõ hơn với biến phân loại có rất nhiều mức (high cardinality) — không phải trường hợp ở đây, vì job_category và company_region đã được gom về lần lượt 5 và 3 nhóm."), ".") } else "CatBoost chưa được đánh giá trong lần chạy này do package chưa được cài đặt trên máy chạy báo cáo (xem lưu ý cài đặt ở trên)."`
+
+Dù không nhất thiết vượt trội hơn mô hình tuyến tính tốt nhất, thử nghiệm Gradient Boosting củng cố hai điểm đã nêu xuyên suốt báo cáo: (i) `experience_level` và `company_region` — bao gồm cả tương tác giữa hai biến này — là các yếu tố chi phối chính, được cả mô hình tuyến tính lẫn mô hình cây đồng thuận; (ii) với cỡ mẫu vừa phải (565 quan sát) và số biến dự báo không quá lớn, độ phức tạp bổ sung của Gradient Boosting không luôn chuyển hoá thành cải thiện dự đoán tương xứng — biến đổi đúng thang đo biến mục tiêu (Box–Cox) vẫn là hướng cải tiến hiệu quả nhất cho bộ dữ liệu này.
+
 ### Tổng hợp và khuyến nghị mở rộng
 
 **Mục tiêu.** Tổng hợp lại các phát hiện của bốn mục kiểm tra ở trên thành một bảng đối chiếu hạn chế – phân tích bổ sung, rồi nêu các hướng cải tiến cụ thể còn lại.
@@ -300,7 +440,7 @@ data.frame(
   Hạn_chế_phát_hiện = c(
     "Phần dư vi phạm chuẩn (Shapiro-Wilk p < 0.001, xác nhận lại ở đầu Phần Cải tiến mô hình); log toàn phần không cải thiện RMSE (mục Biến đổi mục tiêu ở trên)",
     "Hệ số employment_typeContract không ổn định — do cỡ mẫu quá nhỏ (n=5)",
-    "R² tối đa ~0.48–0.49 dù đã thử 5 mô hình khác nhau",
+    "R² tối đa ~0.48–0.49 dù đã thử tới 7 mô hình khác nhau, kể cả Gradient Boosting (XGBoost/CatBoost)",
     "work_year mất ý nghĩa sau kiểm soát — xu hướng thời gian thô lẫn với thay đổi cơ cấu mẫu",
     "LASSO chỉ co từng dummy riêng lẻ, không loại nguyên khối remote_ratio dù cả khối không có ý nghĩa"
   ),

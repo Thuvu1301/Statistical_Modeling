@@ -136,12 +136,6 @@ scale_fill_explevel  <- function(...) scale_fill_manual(values = PAL_EXP_LEVEL, 
 scale_fill_compsize  <- function(...) scale_fill_manual(values = PAL_COMPANY_SIZE, ...)
 scale_fill_remote    <- function(...) scale_fill_manual(values = PAL_REMOTE, ...)
 
-# Winsorize 1%–99% (Sheather 2009, §3.2.3)
-winsorize <- function(x, low = 0.01, high = 0.99) {
-  q <- quantile(x, c(low, high), na.rm = TRUE)
-  pmax(pmin(x, q[2]), q[1])
-}
-
 # Hai hàm hỗ trợ trình bày bảng tần suất — thay cho print(table(...)) console,
 # dùng xuyên suốt file để mọi bảng tần suất đều ra dạng bảng thật (kbl), nhất
 # quán với cách trình bày bảng của phần còn lại trong báo cáo.
@@ -747,7 +741,7 @@ ggplot(salary_model, aes(y = salary_in_usd)) +
                outlier.color = "red", outlier.size = 1.5) +
   scale_y_continuous(labels = label_comma(prefix = "$")) +
   labs(
-    title    = "Phân phối salary_in_usd — Trước winsorize",
+    title    = "Phân phối salary_in_usd — Trước xử lý outlier",
     subtitle = "Điểm đỏ: outlier ngoài khoảng [Q1 − 1.5·IQR, Q3 + 1.5·IQR]",
     y        = "salary_in_usd (USD)", x = NULL
   ) +
@@ -861,8 +855,7 @@ mid_extreme <- salary_model |>
   filter(experience_level == "Mid", salary_in_usd > 400000) |>
   arrange(desc(salary_in_usd))
 
-q99_check       <- quantile(salary_model$salary_in_usd, 0.99)
-n_mid_above_q99 <- sum(mid_extreme$salary_in_usd > q99_check)
+n_mid_above_fence <- sum(mid_extreme$salary_in_usd > upper_fence)
 
 mid_extreme |>
   select(salary_in_usd, job_category, employment_type, company_size,
@@ -874,36 +867,34 @@ mid_extreme |>
                 latex_options = c("HOLD_position", "scale_down"), font_size = 11)
 ```
 
-`r nrow(mid_extreme)` quan sát này thuộc nhóm chức danh `r paste(unique(as.character(mid_extreme$job_category)), collapse = ", ")`, quy mô `r paste(unique(as.character(mid_extreme$company_size)), collapse = ", ")`, khu vực `r paste(unique(as.character(mid_extreme$company_region)), collapse = ", ")`. `r n_mid_above_q99`/`r nrow(mid_extreme)` đã vượt ngưỡng phân vị 99% (`r format(round(q99_check), big.mark = ",", scientific = FALSE)` USD), nên sẽ tự động được winsorize chặn trên ở mục dưới mà không cần luật riêng.
+`r nrow(mid_extreme)` quan sát này thuộc nhóm chức danh `r paste(unique(as.character(mid_extreme$job_category)), collapse = ", ")`, quy mô `r paste(unique(as.character(mid_extreme$company_size)), collapse = ", ")`, khu vực `r paste(unique(as.character(mid_extreme$company_region)), collapse = ", ")`. `r n_mid_above_fence`/`r nrow(mid_extreme)` đã vượt chặn trên IQR (`r format(round(upper_fence), big.mark = ",", scientific = FALSE)` USD), nên sẽ tự động được cắt về ngưỡng này ở mục dưới mà không cần luật riêng.
 
-Nhóm không tạo ngoại lệ xử lý riêng cho 3 quan sát này: sửa từng trường hợp theo cảm quan sẽ đưa yếu tố chủ quan vào bước cần khách quan (data snooping), trong khi winsorize chặn trên đã xử lý chúng nhất quán với mọi outlier khác. Tổ hợp "Mid-level nhưng lương ngang Senior/Exec" vẫn là điểm bất thường đáng ghi nhận — có thể do gán nhãn `experience_level` chưa chính xác hoặc do kỹ năng hiếm được trả vượt khung — và được liệt kê ở phần hạn chế của dữ liệu.
+Nhóm không tạo ngoại lệ xử lý riêng cho 3 quan sát này: sửa từng trường hợp theo cảm quan sẽ đưa yếu tố chủ quan vào bước cần khách quan (data snooping), trong khi cắt tại chặn trên IQR đã xử lý chúng nhất quán với mọi outlier khác. Tổ hợp "Mid-level nhưng lương ngang Senior/Exec" vẫn là điểm bất thường đáng ghi nhận — có thể do gán nhãn `experience_level` chưa chính xác hoặc do kỹ năng hiếm được trả vượt khung — và được liệt kê ở phần hạn chế của dữ liệu.
 
-#### Xử lý outlier: winsorize một chiều ở chặn trên (phân vị 99%)
+#### Xử lý outlier: cắt (capping) một chiều tại chặn trên theo quy tắc IQR
 
-Quy tắc IQR dùng để **phát hiện và mô tả** outlier (chuẩn trực quan của boxplot) chỉ tìm thấy bằng chứng bất thường ở **chặn trên** — không có quan sát nào vượt ngưỡng dưới. Vì vậy, báo cáo áp dụng chiến lược winsorize **một chiều**, chỉ cắt tại phân vị 99% và **giữ nguyên chặn dưới**:
+Quy tắc IQR dùng để **phát hiện** outlier ở trên cũng được dùng luôn để **xử lý**: báo cáo áp dụng capping **một chiều**, chỉ cắt các giá trị vượt chặn trên `Q3 + 1.5·IQR` về đúng ngưỡng này, và **giữ nguyên chặn dưới** vì không có bằng chứng bất thường ở phía đó:
 
 ```{r outlier-stats}
-q01 <- quantile(salary_model$salary_in_usd, 0.01)   # chỉ để tham khảo, KHÔNG áp dụng
-q99 <- quantile(salary_model$salary_in_usd, 0.99)
-n_below <- sum(salary_model$salary_in_usd < q01)     # tham khảo — không bị winsorize
-n_above <- sum(salary_model$salary_in_usd > q99)
+n_below <- n_out_lower   # tham khảo — không xử lý, không có bằng chứng bất thường
+n_above <- n_out_upper   # sẽ bị cắt (capping) về upper_fence
 
 data.frame(
-  `Ngưỡng` = c("Phân vị 1% (tham khảo, KHÔNG áp dụng)", "Phân vị 99% (áp dụng winsorize)"),
-  `Giá trị (USD)` = c(format(round(q01), big.mark = ",", scientific = FALSE), format(round(q99), big.mark = ",", scientific = FALSE)),
+  `Ngưỡng` = c("Chặn dưới Q1 − 1.5·IQR (tham khảo, KHÔNG áp dụng)", "Chặn trên Q3 + 1.5·IQR (áp dụng capping)"),
+  `Giá trị (USD)` = c(format(round(lower_fence), big.mark = ",", scientific = FALSE), format(round(upper_fence), big.mark = ",", scientific = FALSE)),
   `Số quan sát` = c(paste(n_below, "— không xử lý"), paste(n_above, "— bị kéo về ngưỡng này")),
   check.names = FALSE
 ) |>
-  kbl(booktabs = TRUE, caption = "Ngưỡng winsorize một chiều tại chặn trên (phân vị thứ 99)") |>
+  kbl(booktabs = TRUE, caption = "Ngưỡng capping một chiều tại chặn trên theo quy tắc IQR") |>
   kable_styling(bootstrap_options = c("hover"),
                 latex_options = c("HOLD_position", "scale_down"), font_size = 11, full_width = FALSE)
 ```
 
-Winsorize chỉ áp dụng một chiều (chặn trên): phân vị là ngưỡng cố định theo tỷ lệ, luôn có ~1% quan sát dưới phân vị thứ nhất bất kể có bằng chứng bất thường hay không, nên áp cho chặn dưới sẽ "xử lý" `r n_below` quan sát vô căn cứ. Chặn trên ngược lại có bằng chứng hội tụ từ ba nguồn: quy tắc IQR (10 quan sát), phân tích cơ cấu (tập trung ở Senior/Exec, Large, Northern_America), và Cook's Distance. Xử lý một chiều vì vậy nhất quán với nguyên tắc *"không xử lý nếu không có bằng chứng"* đã nêu ở đầu mục.
+Capping chỉ áp dụng một chiều (chặn trên) vì đây là hướng duy nhất có bằng chứng hội tụ: quy tắc IQR tự nó đã phát hiện `r n_out_upper` quan sát vượt chặn trên, và phân tích cơ cấu ở trên cho thấy nhóm này tập trung ở Senior/Exec, công ty Large, khu vực Northern_America — không phải nhiễu ngẫu nhiên. Chặn dưới không có quan sát nào vượt ngưỡng (`r n_below` quan sát), nên không có căn cứ để xử lý. Vì ngưỡng xử lý (`upper_fence`) chính là ngưỡng đã dùng để phát hiện outlier ở trên, toàn bộ `r n_out_upper` quan sát bị gắn cờ đều được xử lý nhất quán, không còn khoảng hở giữa bước chẩn đoán và bước xử lý — nhất quán với nguyên tắc *"không xử lý nếu không có bằng chứng"* đã nêu ở đầu mục.
 
 ```{r outlier-apply}
 salary_model <- salary_model |>
-  mutate(salary_in_usd = winsorize(salary_in_usd, low = 0, high = 0.99))
+  mutate(salary_in_usd = pmin(salary_in_usd, upper_fence))
 ```
 
 ```{r outlier-after}
@@ -912,14 +903,14 @@ ggplot(salary_model, aes(y = salary_in_usd)) +
                outlier.color = "red", outlier.size = 1.5) +
   scale_y_continuous(labels = label_comma(prefix = "$")) +
   labs(
-    title    = "Phân phối salary_in_usd — Sau winsorize một chiều (phân vị 99%)",
+    title    = "Phân phối salary_in_usd — Sau capping một chiều theo IQR",
     subtitle = "Chặn dưới giữ nguyên; chỉ giá trị cực đoan ở chặn trên được kéo về ngưỡng biên",
     y        = "salary_in_usd (USD)", x = NULL
   ) +
   coord_flip()
 ```
 
-Outlier trên ngưỡng có căn cứ nghiệp vụ rõ ràng (Senior/Exec, công ty Large, tập trung Northern_America), nên xóa bỏ sẽ làm mất thông tin thật và thiên lệch mẫu. Thay vào đó, **winsorize một chiều tại phân vị 99%** kéo giá trị cực đoan về ngưỡng biên, giữ nguyên toàn bộ 607 quan sát (Sheather 2009, §3.2.3; Bingham & Fry 2010, §7.1) — vẫn giữ tín hiệu "lương cao hơn hẳn" nhưng giới hạn ảnh hưởng đòn bẩy lên hệ số OLS; chặn dưới không được xử lý vì không có bằng chứng bất thường. Tổng cộng `r n_above` quan sát được điều chỉnh; miền giá trị thu hẹp còn tối đa [`r format(round(min(salary_model$salary_in_usd)), big.mark = ",", scientific = FALSE)` – `r format(round(max(salary_model$salary_in_usd)), big.mark = ",", scientific = FALSE)`] USD.
+Outlier trên ngưỡng có căn cứ nghiệp vụ rõ ràng (Senior/Exec, công ty Large, tập trung Northern_America), nên xóa bỏ sẽ làm mất thông tin thật và thiên lệch mẫu. Thay vào đó, **capping một chiều tại chặn trên IQR** kéo giá trị cực đoan về ngưỡng biên, giữ nguyên toàn bộ `r nrow(salary_model)` quan sát — vẫn giữ tín hiệu "lương cao hơn hẳn" nhưng giới hạn ảnh hưởng đòn bẩy lên hệ số OLS; chặn dưới không được xử lý vì không có bằng chứng bất thường. Tổng cộng `r n_above` quan sát được điều chỉnh; miền giá trị thu hẹp còn tối đa [`r format(round(min(salary_model$salary_in_usd)), big.mark = ",", scientific = FALSE)` – `r format(round(max(salary_model$salary_in_usd)), big.mark = ",", scientific = FALSE)`] USD.
 
 ### Tổng kết tiền xử lý
 
@@ -930,14 +921,14 @@ data.frame(
     "2. Gộp job_title → job_category",
     "3. company_location → company_region (M49 → gộp 3 nhóm); tạo cross_border; bỏ employee_residence",
     "4. Chuyển categorical → factor (relevel)",
-    "5. Winsorize salary_in_usd — một chiều, chặn trên [phân vị 99%]"
+    "5. Capping salary_in_usd — một chiều, chặn trên [IQR: Q3 + 1.5·IQR]"
   ),
   Lý_do       = c(
     "Collinear với target; ~17 dummy tiền tệ không cần thiết",
     "50+ chức danh → 5 nhóm chức năng, tránh overfitting",
     "Giảm 50+ dummy xuống 2+1; 6 vùng M49 gộp thành 3 vì 4 vùng gốc có <50 quan sát; cross_border giữ thông tin duy nhất của employee_residence; trùng lặp >90%",
     "R cần factor để tạo dummy; reference level xác định rõ diễn giải",
-    "IQR chỉ phát hiện outlier ở chặn trên (không có bằng chứng ở chặn dưới) — winsorize một chiều nhất quán với bằng chứng; giữ 607 quan sát, giảm ảnh hưởng điểm cực đoan lên hệ số OLS"
+    "IQR chỉ phát hiện outlier ở chặn trên (không có bằng chứng ở chặn dưới) — capping một chiều dùng đúng ngưỡng đã phát hiện; giữ nguyên toàn bộ quan sát, giảm ảnh hưởng điểm cực đoan lên hệ số OLS"
   ),
   Tham_khảo   = c(
     "Sheather (2009) §2.1",
@@ -992,7 +983,7 @@ data.frame(
   ),
   row.names = NULL
 ) |>
-  kbl(booktabs = TRUE, caption = "Thống kê mô tả biến mục tiêu salary_in_usd (sau winsorize)") |>
+  kbl(booktabs = TRUE, caption = "Thống kê mô tả biến mục tiêu salary_in_usd (sau xử lý outlier)") |>
   kable_styling(bootstrap_options = c("hover"),
                 latex_options = c("HOLD_position", "scale_down"), font_size = 11) |>
   column_spec(1, bold = TRUE)
@@ -1642,11 +1633,11 @@ data.frame(
     "Lưu ý mô hình hóa"
   ),
   Chi_tiết   = c(
-    paste0(nrow(salary_model), " quan sát — giữ nguyên 607"),
+    paste0(nrow(salary_model), " quan sát — không loại quan sát nào (chỉ cắt giá trị cực đoan)"),
     paste0("salary_in_usd — phân phối lệch phải; cân nhắc log-transform"),
     paste0(n_preds, " biến (", n_preds - 1, " categorical + 1 numeric)"),
     "0 NA — không cần imputation",
-    paste0("Winsorize một chiều tại phân vị 99% (chặn trên); ", n_above, " quan sát được điều chỉnh"),
+    paste0("Capping một chiều tại chặn trên IQR (Q3 + 1.5·IQR); ", n_above, " quan sát được điều chỉnh"),
     "salary, salary_currency, job_title, employee_residence, company_location",
     "job_category (5 nhóm chức năng); company_region (gộp còn 3 nhóm từ M49); cross_border (0/1)",
     "experience_level là yếu tố dự báo mạnh nhất trong nhóm biến thứ tự; job_category phân tầng lương rõ qua boxplot (không tách riêng nhóm Manager/Lead)"
