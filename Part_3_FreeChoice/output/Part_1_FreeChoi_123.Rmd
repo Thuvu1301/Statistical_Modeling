@@ -43,7 +43,7 @@ Biến `season` và `weathersit` được mã hóa dưới dạng số nhưng ma
 ## Tổng quan về dữ liệu
 
 ```{r}
-bike_raw = read_csv("../DoAn/bike_sharing_hour.csv")
+bike_raw = read_csv("../data/raw/bike_sharing_hour.csv")
 glimpse(bike_raw)
 ```
 
@@ -271,6 +271,11 @@ if (is.matrix(vif_result)) {
 knitr::kable(
   vif_table,
   digits = 3,
+  col.names = if (ncol(vif_table) == 4) {
+    c("Biến", "GVIF", "Bậc tự do", "GVIF hiệu chỉnh")
+  } else {
+    c("Biến", "VIF")
+  },
   caption = "Kết quả kiểm tra đa cộng tuyến của mô hình đầy đủ"
 )
 ```
@@ -306,6 +311,7 @@ vif_table_reduced_1 <- tibble(
 knitr::kable(
   vif_table_reduced_1,
   digits = 3,
+  col.names = c("Biến", "GVIF", "Bậc tự do", "GVIF hiệu chỉnh"),
   caption = "Kết quả kiểm tra đa cộng tuyến sau khi loại biến atemp"
 )
 ```
@@ -889,6 +895,11 @@ if (is.matrix(vif_stepwise)) {
 knitr::kable(
   vif_stepwise_table,
   digits = 3,
+  col.names = if (ncol(vif_stepwise_table) == 4) {
+    c("Biến", "GVIF", "Bậc tự do", "GVIF hiệu chỉnh")
+  } else {
+    c("Biến", "VIF")
+  },
   caption = "Kiểm tra đa cộng tuyến của mô hình OLS Stepwise"
 )
 ```
@@ -952,7 +963,99 @@ par(mfrow = c(1, 1))
 
 Trên biểu đồ Q–Q, các điểm quan sát lệch đáng kể khỏi đường tham chiếu, đặc biệt tại hai phần đuôi, cho thấy giả định phân phối chuẩn của phần dư chưa được đáp ứng tốt. Bên cạnh đó, biểu đồ phần dư theo giá trị dự báo cho thấy độ phân tán của phần dư thay đổi theo mức dự báo và có xu hướng mở rộng khi giá trị dự báo tăng, thể hiện dấu hiệu phương sai phần dư không đồng nhất.
 
-Do đó, phép biến đổi Box–Cox được xem xét nhằm giảm độ lệch của biến phản hồi, cải thiện phân phối phần dư và hỗ trợ ổn định phương sai của mô hình. Tham số biến đổi được ước lượng chỉ trên tập huấn luyện để tránh sử dụng thông tin từ tập kiểm định.
+**Kiểm định chính thức các giả định BLUE**
+
+Để đánh giá định lượng các giả định của mô hình hồi quy tuyến tính cổ điển (BLUE), bốn kiểm định giả thuyết được thực hiện trên mô hình OLS Stepwise ở mức ý nghĩa $\alpha = 0{,}05$: kiểm định RESET (dạng hàm tuyến tính), kiểm định Breusch--Pagan (phương sai sai số đồng nhất), kiểm định Durbin--Watson (tự tương quan bậc 1, các quan sát được sắp xếp theo `datetime` do dữ liệu có cấu trúc thời gian) và kiểm định Kolmogorov--Smirnov (phân phối chuẩn của phần dư chuẩn hóa).
+
+```{r ols-stepwise-blue-tests}
+library(lmtest)
+
+# Kiểm định RESET (Ramsey) - dạng hàm tuyến tính
+reset_stepwise <- lmtest::resettest(
+  ols_stepwise,
+  power = 2:3,
+  type = "fitted"
+)
+
+# Kiểm định Breusch-Pagan - phương sai sai số đồng nhất
+bp_stepwise <- lmtest::bptest(ols_stepwise)
+
+# Kiểm định Durbin-Watson - tự tương quan bậc 1
+# (sắp xếp phần dư theo datetime vì dữ liệu có cấu trúc thời gian)
+dw_stepwise <- lmtest::dwtest(
+  ols_stepwise,
+  order.by = train_data$datetime,
+  alternative = "two.sided",
+  exact = FALSE
+)
+
+# Kiểm định Kolmogorov-Smirnov - phân phối chuẩn của phần dư chuẩn hóa
+ks_stepwise <- suppressWarnings(
+  ks.test(
+    rstandard(ols_stepwise),
+    "pnorm",
+    mean = 0,
+    sd = 1
+  )
+)
+
+p_stepwise <- c(
+  reset_stepwise$p.value,
+  bp_stepwise$p.value,
+  dw_stepwise$p.value,
+  ks_stepwise$p.value
+)
+
+n_violations_stepwise <- sum(p_stepwise < 0.05)
+
+blue_table_stepwise <- tibble(
+  Kiem_dinh = c(
+    "RESET (Ramsey)",
+    "Breusch-Pagan",
+    "Durbin-Watson",
+    "Kolmogorov-Smirnov"
+  ),
+  Gia_dinh_H0 = c(
+    "Dạng hàm tuyến tính là phù hợp",
+    "Phương sai sai số đồng nhất",
+    "Không tự tương quan bậc 1",
+    "Phần dư chuẩn hóa ~ N(0,1)"
+  ),
+  Thong_ke = round(c(
+    reset_stepwise$statistic,
+    bp_stepwise$statistic,
+    dw_stepwise$statistic,
+    ks_stepwise$statistic
+  ), 4),
+  P_value = ifelse(
+    p_stepwise < 0.0001,
+    "< 0,0001",
+    format(round(p_stepwise, 4), nsmall = 4)
+  ),
+  Ket_luan_alpha_5 = ifelse(
+    p_stepwise < 0.05,
+    "Bác bỏ H0",
+    "Chưa đủ cơ sở bác bỏ H0"
+  )
+)
+
+knitr::kable(
+  blue_table_stepwise,
+  digits = 4,
+  col.names = c("Kiểm định", "Giả thuyết H0", "Thống kê", "P-value", "Kết luận (α = 5%)"),
+  caption = "Kết quả kiểm định các giả định BLUE của mô hình OLS Stepwise (alpha = 5\\%)"
+)
+```
+
+**Kiểm định RESET (dạng hàm tuyến tính):** Giả thuyết $H_0$: mô hình có dạng hàm tuyến tính phù hợp, không thiếu các thành phần bậc cao của giá trị dự báo; $H_1$: dạng hàm hiện tại của mô hình chưa phù hợp. Kết quả cho thống kê $F=$ `r round(reset_stepwise$statistic, 3)` với p-value `r ifelse(reset_stepwise$p.value < 0.0001, "< 0,0001", format(round(reset_stepwise$p.value, 4), nsmall = 4))`. Vì p-value `r ifelse(reset_stepwise$p.value < 0.05, "nhỏ hơn", "lớn hơn hoặc bằng")` $\alpha = 0{,}05$ nên `r ifelse(reset_stepwise$p.value < 0.05, "bác bỏ", "chưa đủ cơ sở bác bỏ")` giả thuyết $H_0$ ở mức ý nghĩa 5%.
+
+**Kiểm định Breusch--Pagan (phương sai đồng nhất):** Giả thuyết $H_0$: phương sai của sai số là đồng nhất (homoscedasticity); $H_1$: phương sai của sai số không đồng nhất (heteroscedasticity). Kết quả cho thống kê $BP=$ `r round(bp_stepwise$statistic, 3)` với p-value `r ifelse(bp_stepwise$p.value < 0.0001, "< 0,0001", format(round(bp_stepwise$p.value, 4), nsmall = 4))`. Vì p-value `r ifelse(bp_stepwise$p.value < 0.05, "nhỏ hơn", "lớn hơn hoặc bằng")` $\alpha = 0{,}05$ nên `r ifelse(bp_stepwise$p.value < 0.05, "bác bỏ", "chưa đủ cơ sở bác bỏ")` giả thuyết $H_0$ ở mức ý nghĩa 5%.
+
+**Kiểm định Durbin--Watson (tự tương quan bậc 1):** Giả thuyết $H_0$: không có tự tương quan bậc 1 giữa các phần dư ($\rho=0$); $H_1$: có tự tương quan bậc 1 giữa các phần dư ($\rho\neq0$). Kết quả cho thống kê $DW=$ `r round(dw_stepwise$statistic, 3)` với p-value `r ifelse(dw_stepwise$p.value < 0.0001, "< 0,0001", format(round(dw_stepwise$p.value, 4), nsmall = 4))`. Vì p-value `r ifelse(dw_stepwise$p.value < 0.05, "nhỏ hơn", "lớn hơn hoặc bằng")` $\alpha = 0{,}05$ nên `r ifelse(dw_stepwise$p.value < 0.05, "bác bỏ", "chưa đủ cơ sở bác bỏ")` giả thuyết $H_0$ ở mức ý nghĩa 5%.
+
+**Kiểm định Kolmogorov--Smirnov (phân phối chuẩn của phần dư):** Giả thuyết $H_0$: phần dư chuẩn hóa của mô hình tuân theo phân phối chuẩn tắc $N(0,1)$; $H_1$: phần dư chuẩn hóa không tuân theo phân phối chuẩn tắc. Kết quả cho thống kê $D=$ `r round(ks_stepwise$statistic, 4)` với p-value `r ifelse(ks_stepwise$p.value < 0.0001, "< 0,0001", format(round(ks_stepwise$p.value, 4), nsmall = 4))`. Vì p-value `r ifelse(ks_stepwise$p.value < 0.05, "nhỏ hơn", "lớn hơn hoặc bằng")` $\alpha = 0{,}05$ nên `r ifelse(ks_stepwise$p.value < 0.05, "bác bỏ", "chưa đủ cơ sở bác bỏ")` giả thuyết $H_0$ ở mức ý nghĩa 5%.
+
+Trong bốn giả định BLUE được kiểm định, có `r n_violations_stepwise` giả định bị bác bỏ ở mức ý nghĩa 5%. `r if (n_violations_stepwise <= 1) "Kết quả này cho thấy mô hình OLS Stepwise nhìn chung đáp ứng tốt các giả định BLUE." else if (n_violations_stepwise == 2) "Kết quả này cho thấy mô hình OLS Stepwise vi phạm một phần các giả định BLUE, nên các kết quả suy diễn (khoảng tin cậy, kiểm định hệ số) cần được diễn giải thận trọng." else "Kết quả này cho thấy mô hình OLS Stepwise vi phạm phần lớn các giả định BLUE, nên các kết quả suy diễn dựa trên mô hình này có thể không còn đáng tin cậy."` Điều này thống nhất với các dấu hiệu quan sát được trên biểu đồ chẩn đoán ở trên. Do đó, phép biến đổi Box–Cox được xem xét nhằm giảm độ lệch của biến phản hồi, cải thiện phân phối phần dư và hỗ trợ ổn định phương sai của mô hình. Tham số biến đổi được ước lượng chỉ trên tập huấn luyện để tránh sử dụng thông tin từ tập kiểm định.
 
 ## Mô hình hồi quy tuyến tính với phép biến đổi Box--Cox
 
@@ -1079,6 +1182,7 @@ lambda_table <- tibble(
 knitr::kable(
   lambda_table,
   digits = 3,
+  col.names = c("Nội dung", "Giá trị"),
   caption = "Kết quả lựa chọn tham số lambda"
 )
 ```
@@ -1244,6 +1348,7 @@ prediction_summary <- tibble(
 knitr::kable(
   prediction_summary,
   digits = 3,
+  col.names = c("Tập dữ liệu", "Dự báo nhỏ nhất", "Dự báo trung bình", "Dự báo lớn nhất"),
   caption = "Thống kê giá trị dự báo của mô hình OLS Box-Cox sau biến đổi ngược"
 )
 ```
@@ -1263,6 +1368,7 @@ boxcox_prediction_preview <- tibble(
 knitr::kable(
   boxcox_prediction_preview,
   digits = 2,
+  col.names = c("Thực tế", "Dự báo (Box-Cox)"),
   caption = "Một số giá trị thực tế và dự báo của mô hình OLS Box-Cox"
 )
 ```
@@ -1270,7 +1376,152 @@ knitr::kable(
 
 ### Kiểm tra các giả định của mô hình
 
-## Các mô hình điều chỉnh 
+Tương tự mô hình OLS Stepwise, các giả định của mô hình OLS Box--Cox được kiểm tra trên thang đo đã biến đổi `cnt_boxcox` thông qua phân phối phần dư, biểu đồ Q--Q và biểu đồ phần dư theo giá trị dự báo, sau đó được kiểm định chính thức bằng bốn kiểm định giả thuyết ở mức ý nghĩa $\alpha = 0{,}05$.
+
+```{r ols-boxcox-diagnostics, fig.width=10, fig.height=8}
+# Phần dư chuẩn hóa và giá trị dự báo trên thang Box-Cox
+standardized_residuals_boxcox <- rstandard(ols_boxcox)
+fitted_values_boxcox <- fitted(ols_boxcox)
+par(mfrow = c(2, 2))
+
+# Phân phối của biến phản hồi sau biến đổi Box-Cox
+hist(
+  train_boxcox$cnt_boxcox,
+  breaks = 50,
+  main = "Phân phối của cnt sau biến đổi Box-Cox",
+  xlab = "cnt_boxcox",
+  ylab = "Tần số",
+  border = "white"
+)
+
+# Phân phối phần dư chuẩn hóa
+hist(
+  standardized_residuals_boxcox,
+  breaks = 50,
+  probability = TRUE,
+  main = "Phân phối phần dư chuẩn hóa",
+  xlab = "Phần dư chuẩn hóa",
+  ylab = "Mật độ",
+  border = "white"
+)
+
+# Đường mật độ của phân phối chuẩn tắc
+curve(dnorm(x, mean = 0, sd = 1), add = TRUE, lwd = 2, lty = 2)
+
+# Biểu đồ Q-Q của phần dư
+qqnorm(standardized_residuals_boxcox, main = "Q-Q plot của phần dư")
+qqline(standardized_residuals_boxcox, lwd = 2, lty = 2)
+
+# Phần dư theo giá trị dự báo
+plot(
+  fitted_values_boxcox,
+  standardized_residuals_boxcox,
+  pch = 16,
+  cex = 0.5,
+  main = "Phần dư theo giá trị dự báo",
+  xlab = "Giá trị dự báo (thang Box-Cox)",
+  ylab = "Phần dư chuẩn hóa"
+)
+
+abline(h = 0, lwd = 2, lty = 2)
+par(mfrow = c(1, 1))
+```
+
+Các biểu đồ trên cung cấp cơ sở trực quan để đối chiếu với kết quả của các kiểm định giả thuyết chính thức được trình bày dưới đây.
+
+**Kiểm định chính thức các giả định BLUE**
+
+```{r ols-boxcox-blue-tests}
+library(lmtest)
+
+# Kiểm định RESET (Ramsey) - dạng hàm tuyến tính
+reset_boxcox <- lmtest::resettest(
+  ols_boxcox,
+  power = 2:3,
+  type = "fitted"
+)
+
+# Kiểm định Breusch-Pagan - phương sai sai số đồng nhất
+bp_boxcox <- lmtest::bptest(ols_boxcox)
+
+# Kiểm định Durbin-Watson - tự tương quan bậc 1
+# (sắp xếp phần dư theo datetime vì dữ liệu có cấu trúc thời gian)
+dw_boxcox <- lmtest::dwtest(
+  ols_boxcox,
+  order.by = train_boxcox$datetime,
+  alternative = "two.sided",
+  exact = FALSE
+)
+
+# Kiểm định Kolmogorov-Smirnov - phân phối chuẩn của phần dư chuẩn hóa
+ks_boxcox <- suppressWarnings(
+  ks.test(
+    rstandard(ols_boxcox),
+    "pnorm",
+    mean = 0,
+    sd = 1
+  )
+)
+
+p_boxcox <- c(
+  reset_boxcox$p.value,
+  bp_boxcox$p.value,
+  dw_boxcox$p.value,
+  ks_boxcox$p.value
+)
+
+n_violations_boxcox <- sum(p_boxcox < 0.05)
+
+blue_table_boxcox <- tibble(
+  Kiem_dinh = c(
+    "RESET (Ramsey)",
+    "Breusch-Pagan",
+    "Durbin-Watson",
+    "Kolmogorov-Smirnov"
+  ),
+  Gia_dinh_H0 = c(
+    "Dạng hàm tuyến tính là phù hợp",
+    "Phương sai sai số đồng nhất",
+    "Không tự tương quan bậc 1",
+    "Phần dư chuẩn hóa ~ N(0,1)"
+  ),
+  Thong_ke = round(c(
+    reset_boxcox$statistic,
+    bp_boxcox$statistic,
+    dw_boxcox$statistic,
+    ks_boxcox$statistic
+  ), 4),
+  P_value = ifelse(
+    p_boxcox < 0.0001,
+    "< 0,0001",
+    format(round(p_boxcox, 4), nsmall = 4)
+  ),
+  Ket_luan_alpha_5 = ifelse(
+    p_boxcox < 0.05,
+    "Bác bỏ H0",
+    "Chưa đủ cơ sở bác bỏ H0"
+  )
+)
+
+knitr::kable(
+  blue_table_boxcox,
+  digits = 4,
+  col.names = c("Kiểm định", "Giả thuyết H0", "Thống kê", "P-value", "Kết luận (α = 5%)"),
+  caption = "Kết quả kiểm định các giả định BLUE của mô hình OLS Box-Cox (alpha = 5\\%)"
+)
+```
+
+**Kiểm định RESET (dạng hàm tuyến tính):** Giả thuyết $H_0$: mô hình có dạng hàm tuyến tính phù hợp trên thang đã biến đổi, không thiếu các thành phần bậc cao của giá trị dự báo; $H_1$: dạng hàm hiện tại của mô hình chưa phù hợp. Kết quả cho thống kê $F=$ `r round(reset_boxcox$statistic, 3)` với p-value `r ifelse(reset_boxcox$p.value < 0.0001, "< 0,0001", format(round(reset_boxcox$p.value, 4), nsmall = 4))`. Vì p-value `r ifelse(reset_boxcox$p.value < 0.05, "nhỏ hơn", "lớn hơn hoặc bằng")` $\alpha = 0{,}05$ nên `r ifelse(reset_boxcox$p.value < 0.05, "bác bỏ", "chưa đủ cơ sở bác bỏ")` giả thuyết $H_0$ ở mức ý nghĩa 5%.
+
+**Kiểm định Breusch--Pagan (phương sai đồng nhất):** Giả thuyết $H_0$: phương sai của sai số là đồng nhất; $H_1$: phương sai của sai số không đồng nhất. Kết quả cho thống kê $BP=$ `r round(bp_boxcox$statistic, 3)` với p-value `r ifelse(bp_boxcox$p.value < 0.0001, "< 0,0001", format(round(bp_boxcox$p.value, 4), nsmall = 4))`. Vì p-value `r ifelse(bp_boxcox$p.value < 0.05, "nhỏ hơn", "lớn hơn hoặc bằng")` $\alpha = 0{,}05$ nên `r ifelse(bp_boxcox$p.value < 0.05, "bác bỏ", "chưa đủ cơ sở bác bỏ")` giả thuyết $H_0$ ở mức ý nghĩa 5%.
+
+**Kiểm định Durbin--Watson (tự tương quan bậc 1):** Giả thuyết $H_0$: không có tự tương quan bậc 1 giữa các phần dư ($\rho=0$); $H_1$: có tự tương quan bậc 1 giữa các phần dư ($\rho\neq0$). Kết quả cho thống kê $DW=$ `r round(dw_boxcox$statistic, 3)` với p-value `r ifelse(dw_boxcox$p.value < 0.0001, "< 0,0001", format(round(dw_boxcox$p.value, 4), nsmall = 4))`. Vì p-value `r ifelse(dw_boxcox$p.value < 0.05, "nhỏ hơn", "lớn hơn hoặc bằng")` $\alpha = 0{,}05$ nên `r ifelse(dw_boxcox$p.value < 0.05, "bác bỏ", "chưa đủ cơ sở bác bỏ")` giả thuyết $H_0$ ở mức ý nghĩa 5%.
+
+**Kiểm định Kolmogorov--Smirnov (phân phối chuẩn của phần dư):** Giả thuyết $H_0$: phần dư chuẩn hóa của mô hình tuân theo phân phối chuẩn tắc $N(0,1)$; $H_1$: phần dư chuẩn hóa không tuân theo phân phối chuẩn tắc. Kết quả cho thống kê $D=$ `r round(ks_boxcox$statistic, 4)` với p-value `r ifelse(ks_boxcox$p.value < 0.0001, "< 0,0001", format(round(ks_boxcox$p.value, 4), nsmall = 4))`. Vì p-value `r ifelse(ks_boxcox$p.value < 0.05, "nhỏ hơn", "lớn hơn hoặc bằng")` $\alpha = 0{,}05$ nên `r ifelse(ks_boxcox$p.value < 0.05, "bác bỏ", "chưa đủ cơ sở bác bỏ")` giả thuyết $H_0$ ở mức ý nghĩa 5%.
+
+So với mô hình OLS Stepwise (vi phạm `r n_violations_stepwise`/4 giả định BLUE ở mức ý nghĩa 5%), mô hình OLS Box--Cox vi phạm `r n_violations_boxcox`/4 giả định. `r if (n_violations_boxcox < n_violations_stepwise) "Kết quả này cho thấy phép biến đổi Box-Cox đã cải thiện mức độ đáp ứng các giả định BLUE so với mô hình OLS trên thang đo gốc." else if (n_violations_boxcox == n_violations_stepwise) "Kết quả này cho thấy phép biến đổi Box-Cox chưa cải thiện rõ rệt mức độ đáp ứng các giả định BLUE so với mô hình OLS trên thang đo gốc." else "Kết quả này cho thấy phép biến đổi Box-Cox không cải thiện, thậm chí làm giảm mức độ đáp ứng các giả định BLUE so với mô hình OLS trên thang đo gốc."` Do đó, các mô hình điều chỉnh (LASSO, Ridge) và mô hình phi tham số được xem xét thêm ở phần tiếp theo nhằm tăng cường độ tin cậy của kết quả dự báo.
+
+## Các mô hình điều chỉnh
 
 ### Chuẩn bị dữ liệu
 
@@ -1344,6 +1595,7 @@ standardization_check <- tibble(
 knitr::kable(
   standardization_check,
   digits = 10,
+  col.names = c("Nội dung", "Giá trị"),
   caption = "Kiểm tra kết quả chuẩn hóa Z-score"
 )
 ```
@@ -1409,7 +1661,12 @@ lambda_lasso_1se <- cv_lasso$lambda.1se
 
 lasso_lambda_table <- tibble(Tham_so = c("lambda.min","lambda.1se"),
   Gia_tri = c(lambda_lasso_min,lambda_lasso_1se))
-knitr::kable(lasso_lambda_table,digits = 6,caption = "Giá trị lambda của mô hình LASSO")
+knitr::kable(
+  lasso_lambda_table,
+  digits = 6,
+  col.names = c("Tham số", "Giá trị"),
+  caption = "Giá trị lambda của mô hình LASSO"
+)
 ```
 
 **Nhận xét:** Giá trị `lambda.min` bằng `r round(lambda_lasso_min, 6)` được lựa chọn để xây dựng mô hình LASSO cuối cùng vì đây là giá trị làm sai số cross-validation trung bình đạt mức nhỏ nhất.
@@ -1442,11 +1699,13 @@ lasso_selection_summary <- tibble(
 )
 knitr::kable(
   lasso_selection_summary,
+  col.names = c("Tổng số hệ số ứng viên", "Số hệ số khác 0", "Số hệ số bằng 0"),
   caption = "Tóm tắt lựa chọn hệ số của mô hình LASSO"
 )
 knitr::kable(
   lasso_selected,
   digits = 4,
+  col.names = c("Biến", "Hệ số"),
   caption = "Các hệ số khác 0 của mô hình LASSO"
 )
 ```
@@ -1515,6 +1774,7 @@ ridge_lambda_table <- tibble(Tham_so = c("lambda.min","lambda.1se"),
 knitr::kable(
   ridge_lambda_table,
   digits = 6,
+  col.names = c("Tham số", "Giá trị"),
   caption = "Giá trị lambda của mô hình Ridge"
 )
 ```
@@ -1556,12 +1816,14 @@ ridge_selection_summary <- tibble(
 
 knitr::kable(
   ridge_selection_summary,
+  col.names = c("Tổng số hệ số", "Số hệ số khác 0", "Số hệ số bằng 0"),
   caption = "Tóm tắt hệ số của mô hình Ridge"
 )
 
 knitr::kable(
   ridge_coefficients,
   digits = 4,
+  col.names = c("Biến", "Hệ số"),
   caption = "Các hệ số của mô hình Ridge"
 )
 ```
@@ -1642,7 +1904,7 @@ dim(ml_valid)
 dim(tree_test)
 ```
 
-### Randome forest
+### Random forest
 #### Tuning Random Forest
 
 ```{r}
@@ -1731,6 +1993,7 @@ rf_tuning_results <- dplyr::bind_rows(
 knitr::kable(
   rf_tuning_results,
   digits = 4,
+  col.names = c("mtry", "Kích thước nút tối thiểu", "RMSE", "MAE", "R²"),
   caption = "Lựa chọn siêu tham số cho Random Forest"
 )
 ```
@@ -1800,6 +2063,7 @@ rf_results <- dplyr::bind_rows(
 knitr::kable(
   rf_results,
   digits = 4,
+  col.names = c("Mô hình", "Tập dữ liệu", "RMSE", "MAE", "R²"),
   caption = "Kết quả đánh giá mô hình Random Forest"
 )
 ```
@@ -1833,6 +2097,7 @@ rf_results <- dplyr::bind_rows(
 knitr::kable(
   rf_results,
   digits = 4,
+  col.names = c("Mô hình", "Tập dữ liệu", "RMSE", "MAE", "R²"),
   caption = "Kết quả đánh giá mô hình Random Forest"
 )
 ```
@@ -1852,6 +2117,7 @@ rf_importance <- tibble(
 knitr::kable(
   rf_importance,
   digits = 4,
+  col.names = c("Biến", "Độ quan trọng"),
   caption = "Độ quan trọng của các biến trong Random Forest"
 )
 
@@ -2103,6 +2369,7 @@ catboost_validation_result <- evaluate_model(
 knitr::kable(
   catboost_validation_result,
   digits = 4,
+  col.names = c("Mô hình", "Tập dữ liệu", "RMSE", "MAE", "R²"),
   caption = "Kết quả CatBoost trên tập validation"
 )
 ```
@@ -2192,6 +2459,7 @@ catboost_results <- dplyr::bind_rows(
 knitr::kable(
   catboost_results,
   digits = 4,
+  col.names = c("Mô hình", "Tập dữ liệu", "RMSE", "MAE", "R²"),
   caption = "Kết quả đánh giá mô hình CatBoost"
 )
 ```
@@ -2281,6 +2549,7 @@ catboost_importance <- tibble::tibble(
 knitr::kable(
   catboost_importance,
   digits = 4,
+  col.names = c("Biến", "Độ quan trọng"),
   caption = "Độ quan trọng của các biến trong mô hình CatBoost"
 )
 ```
@@ -2317,6 +2586,7 @@ ai_results <- dplyr::bind_rows(
 knitr::kable(
   ai_results,
   digits = 4,
+  col.names = c("Mô hình", "Tập dữ liệu", "RMSE", "MAE", "R²"),
   caption = "So sánh kết quả Random Forest và CatBoost"
 )
 
