@@ -55,8 +55,10 @@ if (!requireNamespace("here", quietly = TRUE)) install.packages("here")
 knitr::opts_chunk$set(
   echo = TRUE,
   message = FALSE,
-  warning 
-library(dplyr)
+  warning = FALSE
+)
+
+library(dplyr) # nolint: error.
 library(lubridate)
 library(tidyverse)
 library(car)
@@ -128,7 +130,7 @@ library(knitr)
 
 \newpage
 
-```{r child=here::here("Part_3_FreeChoice", "Part_3_FreeChoice.Rmd"), eval=FALSE}
+```{r child=here::here("Part_3_FreeChoice", "Part_3_FreeChoice.Rmd")}
 ```
 
 # Tài liệu tham khảo

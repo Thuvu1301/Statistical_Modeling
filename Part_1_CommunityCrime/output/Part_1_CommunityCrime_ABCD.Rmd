@@ -1,13 +1,13 @@
 # Dự đoán tỷ lệ tội phạm bạo lực trong các cộng đồng (Communities and Crime)
 
-```{r p1-setup, include=FALSE}
+```{r p1abcd-setup, include=FALSE}
 if (!requireNamespace("here", quietly = TRUE)) install.packages("here")
 source(here::here("config", "setup.R"))
 knitr::opts_chunk$set(fig.align = "center")
 ```
 
 ---
-```{r setup, include=FALSE}
+```{r p1abcd-opts, include=FALSE}
 knitr::opts_chunk$set(
   echo    = FALSE,
   warning = FALSE,
@@ -75,15 +75,14 @@ Bắt đầu từ việc trích xuất danh sách tên biến từ tập tin mô
 
 ```{r import-data}
 # Trích xuất tên biến từ communities.names
-raw_data_dir <- here::here("Part_1_CommunityCrime", "data", "raw")
-name_lines <- readLines(file.path(raw_data_dir, "communities.names"), encoding = "UTF-8")
+name_lines <- readLines("../data/raw/communities.names", encoding = "UTF-8")
 attr_lines <- name_lines[str_detect(name_lines, "^@attribute")]
 col_names  <- str_split(attr_lines, "\\s+") %>% map_chr(2)
 
 cat("Số lượng biến trích xuất được:", length(col_names), "\n")
 
 # Đọc dữ liệu thô, ký tự "?" được khai báo là giá trị khuyết vì vậy chuyển đổi từ "?" thành khuyết 
-crime_raw <- read.csv(file.path(raw_data_dir, "communities.data"), 
+crime_raw <- read.csv("../data/raw/communities.data",
                       header = FALSE,
                       na.strings = "?",
                       col.names = col_names,
@@ -448,7 +447,7 @@ cat("Kích thước dữ liệu còn lại:", dim(df_clean)[1], "quan sát x", d
 ## Kiểm Tra Dữ Liệu Trùng Lặp
 
 Trước khi xử lý dữ liệu khuyết, cần kiểm tra xem có dòng quan sát nào bị trùng lặp hay không.
-```{r duplicate-check}
+```{r p1abcd-duplicate-check}
 # Trùng lặp xét trên toàn bộ các biến
 n_dup_full <- sum(duplicated(crime_raw))
 cat("Số dòng trùng lặp hoàn toàn (toàn bộ biến):", n_dup_full, "/", nrow(crime_raw), "\n")
@@ -817,7 +816,7 @@ kable(multicoll_summary, caption = "Chỉ Số Định Lượng Về Đa Cộng 
 
 Có tới `r n_pairs_09` cặp biến (trên tổng số `r format(n_var*(n_var-1)/2, big.mark=",")` cặp có thể có) mang hệ số tương quan tuyệt đối lớn hơn 0,9; con số này tăng lên `r n_pairs_08` cặp ở ngưỡng 0,8 và `r n_pairs_07` cặp ở ngưỡng 0,7 — cho thấy đa cộng tuyến không chỉ giới hạn ở một vài cặp biến cá biệt mà lan rộng trên diện tích lớn của không gian biến dự báo.
 
-```{r vif-check, results='asis'}
+```{r p1abcd-vif-check, results='asis'}
 full_lm_check <- lm(ViolentCrimesPerPop ~ ., data = df_clean)
 
 vif_result <- tryCatch(car::vif(full_lm_check), error = function(e) e)
@@ -1491,7 +1490,7 @@ pcr_var_gain <- data.frame(
   mutate(Hieu_qua = round(Y_R2_them / X_var_them, 2))
 
 kable(pcr_var_gain,
-      caption = "Mức Đóng Góp Thêm (%) Của Từng PC Vào Phương Sai X và R² Của Y (Tập Train)",
+      caption = "Mức Đóng Góp Thêm (\\%) Của Từng PC Vào Phương Sai X và R² Của Y (Tập Train)",
       col.names = c("PC", "X: % phương sai thêm", "Y: % R² thêm", "Tỷ lệ hiệu quả (Y/X)")) %>%
   kable_styling(bootstrap_options = c("striped", "hover")) %>%
   row_spec(which(pcr_var_gain$Hieu_qua >= 1), bold = TRUE, background = "#EAF3DE")

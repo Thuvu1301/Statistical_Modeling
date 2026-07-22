@@ -1,12 +1,166 @@
-
-<!--
-
 ## Đánh giá mô hình
 
-*(TODO: kiểm tra giả định mô hình (nếu có); đánh giá bằng chỉ số phù hợp
-(RMSE, MAE, R2, Accuracy, AIC, BIC, ...); so sánh và chọn mô hình phù hợp
-nhất nếu xây dựng nhiều mô hình.)*
+### Tiêu chí đánh giá
 
-```{r p3-evaluate}
+Sáu mô hình ở Phần 1 (OLS Stepwise, OLS Box--Cox, LASSO, Ridge, Random Forest, CatBoost) được so sánh trên **tập kiểm định**, cùng thang đo `cnt` gốc, bằng RMSE, MAE và \\(R^2\\). Không dùng AIC/BIC để so sánh vì các mô hình khác thang đo biến phản hồi (`cnt` vs `cnt_boxcox`) và khác loại (tuyến tính vs cây); AIC ở Phần 1 chỉ dùng nội bộ để chọn biến cho OLS Stepwise.
+
+### Tổng hợp kết quả các mô hình
+
+```{r p4-collect-predictions}
+# Dự báo của mô hình OLS Stepwise trên thang cnt gốc
+pred_train_stepwise <- predict(ols_stepwise, newdata = train_data)
+pred_test_stepwise  <- predict(ols_stepwise, newdata = test_data)
+
+# Tổng hợp RMSE, MAE, R2 của cả sáu mô hình trên tập train và test,
+# sử dụng lại hàm evaluate_model() đã định nghĩa ở Phần 1
+model_comparison <- dplyr::bind_rows(
+  evaluate_model(train_data$cnt, pred_train_stepwise, "OLS Stepwise", "Train"),
+  evaluate_model(test_data$cnt,  pred_test_stepwise,  "OLS Stepwise", "Test"),
+  evaluate_model(train_data$cnt, pred_train_boxcox,   "OLS Box-Cox", "Train"),
+  evaluate_model(test_data$cnt,  pred_test_boxcox,    "OLS Box-Cox", "Test"),
+  evaluate_model(y_train, pred_train_lasso, "LASSO", "Train"),
+  evaluate_model(y_test,  pred_test_lasso,  "LASSO", "Test"),
+  evaluate_model(y_train, pred_train_ridge, "Ridge", "Train"),
+  evaluate_model(y_test,  pred_test_ridge,  "Ridge", "Test"),
+  rf_results,
+  catboost_results
+) %>%
+  dplyr::mutate(
+    Mo_hinh = factor(
+      Mo_hinh,
+      levels = c(
+        "OLS Stepwise", "OLS Box-Cox", "LASSO",
+        "Ridge", "Random Forest", "CatBoost"
+      )
+    )
+  ) %>%
+  dplyr::arrange(Mo_hinh, Tap_du_lieu)
+
+knitr::kable(
+  model_comparison,
+  digits = 4,
+  col.names = c("Mô hình", "Tập dữ liệu", "RMSE", "MAE", "R²"),
+  caption = "Kết quả RMSE, MAE và R2 của các mô hình trên tập huấn luyện và tập kiểm định"
+)
 ```
--->
+
+### Kiểm tra dấu hiệu quá khớp (overfitting)
+
+```{r p4-overfit-check}
+model_comparison_wide <- model_comparison %>%
+  # Ép thứ tự Train truoc, Test sau de cot ket qua sau pivot_wider
+  # luon co thu tu co dinh, khong phu thuoc vao thu tu xuat hien trong du lieu
+  dplyr::mutate(Tap_du_lieu = factor(Tap_du_lieu, levels = c("Train", "Test"))) %>%
+  tidyr::pivot_wider(
+    id_cols = Mo_hinh,
+    names_from = Tap_du_lieu,
+    values_from = c(RMSE, MAE, R2)
+  ) %>%
+  dplyr::mutate(
+    Chenh_lech_RMSE = RMSE_Test - RMSE_Train,
+    Ty_le_chenh_lech_RMSE = round(100 * Chenh_lech_RMSE / RMSE_Train, 2)
+  ) %>%
+  dplyr::arrange(RMSE_Test)
+
+knitr::kable(
+  model_comparison_wide,
+  digits = 4,
+  col.names = c(
+    "Mô hình",
+    "RMSE (Train)", "RMSE (Test)",
+    "MAE (Train)", "MAE (Test)",
+    "R² (Train)", "R² (Test)",
+    "Chênh lệch RMSE", "Chênh lệch RMSE (%)"
+  ),
+  caption = "Chênh lệch RMSE giữa tập huấn luyện và tập kiểm định của các mô hình"
+)
+
+model_max_gap <- model_comparison_wide %>%
+  dplyr::slice_max(order_by = Ty_le_chenh_lech_RMSE, n = 1, with_ties = FALSE)
+```
+
+**Nhận xét:** RMSE tập kiểm định của mọi mô hình đều cao hơn tập huấn luyện (bình thường). Mô hình chênh lệch nhiều nhất là `r model_max_gap$Mo_hinh` (~`r model_max_gap$Ty_le_chenh_lech_RMSE`%), phù hợp đặc điểm mô hình cây vốn khớp rất sát dữ liệu train; chưa phải dấu hiệu quá khớp nghiêm trọng vì RMSE test vẫn cạnh tranh.
+
+### So sánh và lựa chọn mô hình
+
+```{r p4-rank-models}
+model_comparison_test <- model_comparison %>%
+  dplyr::filter(Tap_du_lieu == "Test") %>%
+  dplyr::arrange(RMSE) %>%
+  dplyr::mutate(Xep_hang = dplyr::row_number()) %>%
+  dplyr::relocate(Xep_hang)
+
+knitr::kable(
+  model_comparison_test,
+  digits = 4,
+  col.names = c("Xếp hạng", "Mô hình", "Tập dữ liệu", "RMSE", "MAE", "R²"),
+  caption = "Xếp hạng các mô hình theo RMSE trên tập kiểm định"
+)
+
+best_model_overall <- model_comparison_test %>%
+  dplyr::slice(1)
+
+runner_up_model <- model_comparison_test %>%
+  dplyr::slice(2)
+
+# Mô hình phi tham số (Random Forest / CatBoost) có RMSE thấp nhất trên tập
+# kiểm định - đại diện cho lựa chọn ưu tiên độ chính xác dự báo thuần túy
+best_nonparam_model <- model_comparison_test %>%
+  dplyr::filter(Mo_hinh %in% c("Random Forest", "CatBoost")) %>%
+  dplyr::slice(1)
+
+# Kết quả của OLS Box-Cox - đại diện cho lựa chọn ưu tiên khả năng diễn giải
+boxcox_row <- model_comparison_test %>%
+  dplyr::filter(Mo_hinh == "OLS Box-Cox")
+
+model_comparison_test <- model_comparison_test %>%
+  dplyr::mutate(
+    Nhom_khuyen_nghi = dplyr::case_when(
+      Mo_hinh == "OLS Box-Cox" ~ "OLS Box-Cox (de dien giai)",
+      Mo_hinh == best_nonparam_model$Mo_hinh ~
+        paste0(as.character(Mo_hinh), " (du bao chinh xac nhat)"),
+      TRUE ~ "Khac"
+    )
+  )
+```
+
+```{r p4-rmse-plot, fig.width=7, fig.height=4.5}
+label_boxcox <- "OLS Box-Cox (de dien giai)"
+label_nonparam <- paste0(as.character(best_nonparam_model$Mo_hinh), " (du bao chinh xac nhat)")
+
+fill_values <- setNames(
+  c("darkorange", "steelblue", "grey70"),
+  c(label_boxcox, label_nonparam, "Khac")
+)
+
+ggplot(
+  model_comparison_test,
+  aes(x = reorder(Mo_hinh, -RMSE), y = RMSE, fill = Nhom_khuyen_nghi)
+) +
+  geom_col(show.legend = TRUE) +
+  coord_flip() +
+  scale_fill_manual(values = fill_values) +
+  labs(
+    title = "So sánh RMSE của các mô hình trên tập kiểm định",
+    x = NULL,
+    y = "RMSE (lượt thuê/giờ)",
+    fill = NULL
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+**Nhận xét:** Có sự đánh đổi rõ giữa hai nhóm. Mô hình dễ diễn giải tốt nhất là `r boxcox_row$Mo_hinh` (RMSE = `r round(boxcox_row$RMSE, 4)`, \\(R^2\\) = `r round(boxcox_row$R2, 4)`, hạng `r boxcox_row$Xep_hang`/6). Mô hình phi tham số tốt nhất là `r best_nonparam_model$Mo_hinh` (RMSE = `r round(best_nonparam_model$RMSE, 4)`, \\(R^2\\) = `r round(best_nonparam_model$R2, 4)`, hạng `r best_nonparam_model$Xep_hang`/6), vượt trội các mô hình tuyến tính về độ chính xác nhờ nắm bắt được quan hệ phi tuyến/tương tác giữa giờ, mùa vụ và thời tiết.
+
+Ngoài ra, OLS Stepwise vi phạm `r n_violations_stepwise`/4 và OLS Box--Cox vi phạm `r n_violations_boxcox`/4 giả định BLUE (α = 5%, Phần 1) — không ảnh hưởng RMSE/MAE/R², nhưng khiến suy diễn thống kê (khoảng tin cậy, kiểm định hệ số) từ hai mô hình này cần thận trọng hơn.
+
+**Mô hình được lựa chọn:** Vì mục tiêu vừa cần dự báo vừa cần giải trình được, đề tài đề xuất theo hai mục đích sử dụng thay vì chỉ chọn một mô hình duy nhất:
+
+- **Diễn giải/báo cáo — OLS Box--Cox:** hệ số đọc trực tiếp được, minh bạch, và là mô hình tuyến tính có RMSE/MAE thấp nhất, \\(R^2\\) cao nhất trong nhóm.
+- **Độ chính xác dự báo — `r best_nonparam_model$Mo_hinh`:** RMSE/MAE thấp nhất, \\(R^2\\) cao nhất toàn bộ 6 mô hình, đổi lại là hộp đen (diễn giải qua variable importance ở Phần 1).
+
+### Kết luận
+
+`r best_nonparam_model$Mo_hinh` đạt RMSE thấp nhất (`r round(best_nonparam_model$RMSE, 4)`) nhưng là hộp đen; OLS Box--Cox có RMSE cao hơn (`r round(boxcox_row$RMSE, 4)`) nhưng diễn giải được trực tiếp. Đề xuất: **OLS Box--Cox** làm mô hình chính để báo cáo, **`r best_nonparam_model$Mo_hinh`** làm mô hình bổ trợ khi ưu tiên độ chính xác.
+
+Hạn chế: tập train/test chia ngẫu nhiên (không theo thời gian) dù dữ liệu có cấu trúc chuỗi thời gian; mô hình cây không có khoảng tin cậy dự báo như mô hình tuyến tính.
