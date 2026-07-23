@@ -329,6 +329,8 @@ Bảng và biểu đồ trên minh hoạ bản chất của tương tác: khoả
 
 `r txt_interact_note`
 
+Kết quả phân tích cho thấy sự khác biệt về mức lương trong mẫu dữ liệu không xuất hiện như một hiện tượng ngẫu nhiên hay phụ thuộc vào một biến riêng lẻ, mà phản ánh cấu trúc tổ chức của thị trường lao động trong lĩnh vực khoa học dữ liệu. Khi các yếu tố `experience_level`, `job_category` và `company_region` được xét đồng thời, các biến như `work_year` và `remote_ratio` không còn có đóng góp đáng kể trong mô hình nhiều nhân tố. Điều này cho thấy ảnh hưởng của lương chủ yếu được xác định bởi cấp độ kinh nghiệm, nhóm nghề và vị trí địa lý của công ty, trong khi yếu tố thời gian và mô hình làm việc từ xa chỉ mang tính mô tả hơn là giải thích thống kê bền vững. Do đó, kết luận của phần f và g là các khác biệt về mức lương không chỉ có ý nghĩa thống kê mà còn có tính thực tiễn, và sự khác biệt này được củng cố bởi sự đồng nhất giữa các phương pháp kiểm định một chiều, ANOVA nhiều nhân tố và kết quả từ mô hình Ridge.
+
 ### Tóm tắt Phần Đánh giá và so sánh mô hình
 
 ```{r fg-summary}
