@@ -308,43 +308,136 @@ catboost_available <- requireNamespace("catboost", quietly = TRUE)
 
 #### XGBoost
 
-Siêu tham số được chọn cố định (không tinh chỉnh lưới đầy đủ do giới hạn thời gian tính toán), riêng số vòng lặp (`nrounds`) được chọn bằng 5-fold cross-validation trên tập huấn luyện để tránh overfitting:
+Thay vì cố định thủ công, siêu tham số được **tinh chỉnh bằng lưới (grid search)** kết hợp 5-fold cross-validation trên tập huấn luyện: lưới gồm `max_depth` (độ sâu cây), `eta` (tốc độ học) và `min_child_weight` (số quan sát tối thiểu mỗi lá — kiểm soát overfitting khi cỡ mẫu nhỏ); `subsample`/`colsample_bytree` giữ cố định ở 0.8 để giới hạn kích thước lưới. Với mỗi tổ hợp, số vòng lặp (`nrounds`) tối ưu được xác định bằng early stopping (`early_stopping_rounds = 30`) ngay trong CV, tránh overfitting mà không cần dò thêm một chiều riêng cho `nrounds`.
 
-```{r h-xgboost}
+```{r h-xgboost-tune}
 set.seed(2026)
 dtrain_xgb <- xgb.DMatrix(data = x_train, label = y_train)
 dtest_xgb  <- xgb.DMatrix(data = x_test)
 
-xgb_params <- list(objective = "reg:squarederror", eta = 0.05, max_depth = 4,
-                    subsample = 0.8, colsample_bytree = 0.8)
+xgb_grid <- expand.grid(
+  max_depth        = c(3, 4, 6),
+  eta              = c(0.03, 0.05, 0.1),
+  min_child_weight = c(1, 5)
+)
 
-set.seed(2026)
-xgb_cv <- xgb.cv(data = dtrain_xgb, params = xgb_params, nrounds = 1000,
-                 nfold = 5, early_stopping_rounds = 30, verbose = 0)
-best_nrounds_xgb <- if (!is.null(xgb_cv$best_iteration)) xgb_cv$best_iteration else xgb_cv$early_stop$best_iteration
+xgb_tune_results <- purrr::pmap_dfr(xgb_grid, function(max_depth, eta, min_child_weight) {
+  params <- list(objective = "reg:squarederror", eval_metric = "rmse",
+                  max_depth = max_depth, eta = eta, min_child_weight = min_child_weight,
+                  subsample = 0.8, colsample_bytree = 0.8)
+  set.seed(2026)
+  cv <- xgb.cv(data = dtrain_xgb, params = params, nrounds = 800,
+               nfold = 5, early_stopping_rounds = 30, verbose = 0)
+  best_iter <- if (!is.null(cv$best_iteration)) cv$best_iteration else cv$early_stop$best_iteration
+  data.frame(max_depth = max_depth, eta = eta, min_child_weight = min_child_weight,
+             best_nrounds = best_iter,
+             cv_rmse = cv$evaluation_log$test_rmse_mean[best_iter])
+}) |> arrange(cv_rmse)
 
-m_xgb    <- xgb.train(data = dtrain_xgb, params = xgb_params, nrounds = best_nrounds_xgb)
+best_xgb_row    <- xgb_tune_results[1, ]
+best_xgb_params <- list(objective = "reg:squarederror", eval_metric = "rmse",
+                         max_depth = best_xgb_row$max_depth, eta = best_xgb_row$eta,
+                         min_child_weight = best_xgb_row$min_child_weight,
+                         subsample = 0.8, colsample_bytree = 0.8)
+best_nrounds_xgb <- best_xgb_row$best_nrounds
+```
+
+```{r h-xgboost-tune-table}
+xgb_tune_results |>
+  slice_head(n = 8) |>
+  mutate(cv_rmse = fmt(cv_rmse)) |>
+  kbl(booktabs = TRUE, caption = "8 tổ hợp siêu tham số XGBoost có RMSE trung bình 5-fold CV thấp nhất",
+      col.names = c("max_depth", "eta", "min_child_weight", "nrounds tốt nhất", "RMSE CV")) |>
+  kable_styling(bootstrap_options = c("hover"), latex_options = c("HOLD_position", "scale_down"), font_size = 11) |>
+  row_spec(1, background = "#e8f5e9")
+```
+
+`r paste0("Tổ hợp tốt nhất theo CV: max\\_depth = ", best_xgb_row$max_depth, ", eta = ", best_xgb_row$eta, ", min\\_child\\_weight = ", best_xgb_row$min_child_weight, ", với ", best_xgb_row$best_nrounds, "/800 vòng lặp (dừng sớm khi không cải thiện sau 30 vòng), RMSE CV = ", fmt(best_xgb_row$cv_rmse), ". Mô hình cuối cùng được huấn luyện lại trên toàn bộ tập huấn luyện với tổ hợp này.")`
+
+```{r h-xgboost-final}
+m_xgb    <- xgb.train(data = dtrain_xgb, params = best_xgb_params, nrounds = best_nrounds_xgb)
 pred_xgb <- predict(m_xgb, dtest_xgb)
 ```
 
-Số vòng lặp tối ưu theo CV là `r best_nrounds_xgb`/1000 (dừng sớm sau 30 vòng không cải thiện thêm) — tránh việc huấn luyện quá nhiều cây khiến mô hình khớp theo nhiễu của tập huấn luyện.
-
 #### CatBoost
 
-Siêu tham số được chọn cố định tương tự XGBoost để so sánh công bằng — `iterations = 1000`, `depth = 6`, `learning_rate = 0.05`, `loss_function = RMSE` — không tinh chỉnh lưới đầy đủ do giới hạn thời gian tính toán. Khác biệt cốt lõi so với XGBoost nằm ở cách xử lý biến phân loại: các cột phân loại trong `train_df`/`test_df` đã ở dạng `factor` sẵn từ bước tiền xử lý (Phần Tiền xử lý dữ liệu), nên `catboost.load_pool()` tự động nhận diện chúng làm categorical feature dựa trên kiểu cột của data.frame — không cần mã hoá one-hot như XGBoost/Ridge/LASSO, và cũng không cần khai báo tường minh chỉ số cột (`cat_features`), vì tham số này chỉ có tác dụng khi dữ liệu đầu vào là ma trận số thuần tuý.
+Khác biệt cốt lõi so với XGBoost nằm ở cách xử lý biến phân loại: các cột phân loại trong `train_df`/`test_df` đã ở dạng `factor` sẵn từ bước tiền xử lý (Phần Tiền xử lý dữ liệu), nên `catboost.load_pool()` tự động nhận diện chúng làm categorical feature dựa trên kiểu cột của data.frame — không cần mã hoá one-hot như XGBoost/Ridge/LASSO, và cũng không cần khai báo tường minh chỉ số cột (`cat_features`), vì tham số này chỉ có tác dụng khi dữ liệu đầu vào là ma trận số thuần tuý.
 
-```{r h-catboost}
+Theo đúng cách tiếp cận của CatBoost — không dùng trực tiếp tập kiểm định cuối cùng để chọn siêu tham số — tập huấn luyện `train_df` được chia tiếp thành tập xây dựng mô hình (fit, 80%) và tập validation (20%) để theo dõi RMSE và dừng sớm (early stopping):
+
+```{r h-catboost-split}
 if (catboost_available) {
-  train_pool <- catboost::catboost.load_pool(
-    data = train_df[, predictors_all], label = train_df$salary_in_usd)
-  test_pool  <- catboost::catboost.load_pool(
-    data = test_df[, predictors_all])
-
   set.seed(2026)
+  cb_fit_idx <- caret::createDataPartition(train_df$salary_in_usd, p = 0.8, list = FALSE)
+  cb_fit_df  <- train_df[cb_fit_idx, ]
+  cb_val_df  <- train_df[-cb_fit_idx, ]
+}
+```
+
+```{r h-catboost-pools}
+if (catboost_available) {
+  cb_fit_pool <- catboost::catboost.load_pool(
+    data = cb_fit_df[, predictors_all], label = cb_fit_df$salary_in_usd)
+  cb_val_pool <- catboost::catboost.load_pool(
+    data = cb_val_df[, predictors_all], label = cb_val_df$salary_in_usd)
+  train_pool  <- catboost::catboost.load_pool(
+    data = train_df[, predictors_all], label = train_df$salary_in_usd)
+  test_pool   <- catboost::catboost.load_pool(
+    data = test_df[, predictors_all])
+}
+```
+
+Lưới tinh chỉnh gồm `depth`, `learning_rate` và `l2_leaf_reg` (điều chuẩn L2); với mỗi tổ hợp, mô hình được huấn luyện trên tập fit với tối đa 2.000 cây và early stopping trên tập validation (`od_wait = 100`, `use_best_model = TRUE`) để chọn số cây phù hợp, tương tự cơ chế đã dùng ở ví dụ CatBoost tham khảo:
+
+```{r h-catboost-tune}
+if (catboost_available) {
+  cb_grid <- expand.grid(
+    depth         = c(4, 6, 8),
+    learning_rate = c(0.03, 0.05, 0.1),
+    l2_leaf_reg   = c(3, 5, 10)
+  )
+
+  cb_tune_results <- purrr::pmap_dfr(cb_grid, function(depth, learning_rate, l2_leaf_reg) {
+    set.seed(2026)
+    m <- catboost::catboost.train(
+      learn_pool = cb_fit_pool, test_pool = cb_val_pool,
+      params = list(loss_function = "RMSE", eval_metric = "RMSE",
+                    iterations = 2000, learning_rate = learning_rate, depth = depth,
+                    l2_leaf_reg = l2_leaf_reg, od_type = "Iter", od_wait = 100,
+                    use_best_model = TRUE, random_seed = 2026,
+                    allow_writing_files = FALSE, logging_level = "Silent"))
+    pred_val <- catboost::catboost.predict(m, cb_val_pool)
+    data.frame(depth = depth, learning_rate = learning_rate, l2_leaf_reg = l2_leaf_reg,
+               best_trees = m$tree_count,
+               val_rmse = sqrt(mean((cb_val_df$salary_in_usd - pred_val)^2)))
+  }) |> arrange(val_rmse)
+
+  best_cb_row <- cb_tune_results[1, ]
+}
+```
+
+```{r h-catboost-tune-table}
+if (catboost_available) {
+  cb_tune_results |>
+    slice_head(n = 8) |>
+    mutate(val_rmse = fmt(val_rmse)) |>
+    kbl(booktabs = TRUE, caption = "8 tổ hợp siêu tham số CatBoost có RMSE validation thấp nhất",
+        col.names = c("depth", "learning_rate", "l2_leaf_reg", "Số cây tốt nhất", "RMSE validation")) |>
+    kable_styling(bootstrap_options = c("hover"), latex_options = c("HOLD_position", "scale_down"), font_size = 11) |>
+    row_spec(1, background = "#e8f5e9")
+}
+```
+
+`r if (catboost_available) paste0("Tổ hợp tốt nhất theo validation: depth = ", best_cb_row$depth, ", learning\\_rate = ", best_cb_row$learning_rate, ", l2\\_leaf\\_reg = ", best_cb_row$l2_leaf_reg, ", với ", best_cb_row$best_trees, "/2.000 cây (dừng sớm khi không cải thiện sau 100 vòng), RMSE validation = ", fmt(best_cb_row$val_rmse), ". Mô hình cuối cùng được huấn luyện lại trên toàn bộ tập huấn luyện với tổ hợp này (không dùng early stopping ở bước huấn luyện lại).") else "CatBoost chưa được đánh giá do package chưa được cài đặt (xem lưu ý cài đặt ở trên)."`
+
+```{r h-catboost-final}
+if (catboost_available) {
   m_catboost <- catboost::catboost.train(
-    train_pool, params = list(loss_function = "RMSE", iterations = 1000,
-                               depth = 6, learning_rate = 0.05,
-                               random_seed = 2026, logging_level = "Silent"))
+    learn_pool = train_pool,
+    params = list(loss_function = "RMSE", iterations = best_cb_row$best_trees,
+                  learning_rate = best_cb_row$learning_rate, depth = best_cb_row$depth,
+                  l2_leaf_reg = best_cb_row$l2_leaf_reg, use_best_model = FALSE,
+                  random_seed = 2026, allow_writing_files = FALSE, logging_level = "Silent"))
   pred_catboost <- catboost::catboost.predict(m_catboost, test_pool)
 }
 ```
