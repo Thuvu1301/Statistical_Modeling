@@ -1,1 +1,797 @@
+# Kiểm tra các giả định của mô hình
+
+Các giả định được kiểm tra trên **tập train**, vì đây là dữ liệu được sử dụng để ước lượng mô hình và tạo phần dư. Tập validation chỉ được sử dụng để đánh giá khả năng dự báo của các mô hình, nhằm hạn chế việc sử dụng thông tin từ tập validation trong quá trình xây dựng và điều chỉnh mô hình.
+
+Mức ý nghĩa được lựa chọn là:
+
+$$
+\alpha=0.05.
+$$
+
+Các kiểm định giả thuyết cổ điển được thực hiện cho mô hình **OLS Stepwise AIC** và bước hồi quy của mô hình **PCR**. Đối với Ridge và LASSO, các hệ số được ước lượng kèm theo thành phần phạt và tham số $\lambda$ được lựa chọn bằng cross-validation. Vì vậy, các kiểm định giả thuyết cổ điển dành cho hệ số OLS không được áp dụng trực tiếp cho Ridge và LASSO. Hai mô hình này được đánh giá chủ yếu thông qua hiệu năng trên tập validation và biểu đồ sai số dự báo.
+
+Trước tiên, mô hình PCR được biểu diễn dưới dạng hồi quy tuyến tính giữa biến phản hồi và các điểm thành phần chính đã được lựa chọn.
+
+```{r prepare-pcr-diagnostics, echo=TRUE}
+# Lấy điểm của các thành phần chính được lựa chọn cho mô hình PCR
+pc_scores_diag <- as.data.frame(
+  pca_model$x[, seq_len(n_cv_onesigma), drop = FALSE]
+)
+
+colnames(pc_scores_diag) <- paste0(
+  "PC",
+  seq_len(n_cv_onesigma)
+)
+
+# Tạo dữ liệu hồi quy PCR trên tập train
+pcr_diag_data <- bind_cols(
+  tibble(
+    ViolentCrimesPerPop = train_df$ViolentCrimesPerPop
+  ),
+  pc_scores_diag
+)
+
+# Hồi quy biến phản hồi theo các thành phần chính
+pcr_lm_diag <- lm(
+  ViolentCrimesPerPop ~ .,
+  data = pcr_diag_data
+)
+```
+
+## Kiểm định tính tuyến tính của mô hình
+
+Kiểm định Ramsey RESET được sử dụng để đánh giá liệu dạng hàm tuyến tính hiện tại có phù hợp hay còn thiếu các thành phần phi tuyến quan trọng.
+
+Giả thuyết kiểm định được phát biểu như sau:
+
+$$
+H_0:\text{Dạng hàm tuyến tính của mô hình là phù hợp}.
+$$
+
+$$
+H_1:\text{Mô hình bị sai dạng hàm hoặc còn thiếu thành phần phi tuyến}.
+$$
+
+Nếu p-value nhỏ hơn $0.05$, bác bỏ $H_0$ và kết luận rằng có bằng chứng cho thấy mô hình tuyến tính hiện tại chưa mô tả đầy đủ mối quan hệ giữa các biến giải thích và tỷ lệ tội phạm.
+
+```{r reset-test, echo=TRUE}
+# Kiểm định Ramsey RESET
+reset_ols <- lmtest::resettest(
+  ols_stepwise,
+  power = 2:3,
+  type = "fitted"
+)
+
+reset_pcr <- lmtest::resettest(
+  pcr_lm_diag,
+  power = 2:3,
+  type = "fitted"
+)
+
+reset_result <- tibble(
+  Mo_hinh = c(
+    "OLS (Stepwise AIC)",
+    "PCR"
+  ),
+  Thong_ke = c(
+    unname(reset_ols$statistic),
+    unname(reset_pcr$statistic)
+  ),
+  P_value = c(
+    reset_ols$p.value,
+    reset_pcr$p.value
+  )
+) %>%
+  mutate(
+    Quyet_dinh = if_else(
+      P_value < 0.05,
+      "Bác bỏ H0",
+      "Chưa bác bỏ H0"
+    ),
+    Ket_luan = if_else(
+      P_value < 0.05,
+      "Có dấu hiệu mô hình bị sai dạng hàm hoặc thiếu thành phần phi tuyến",
+      "Chưa có bằng chứng cho thấy mô hình bị sai dạng hàm"
+    )
+  )
+
+reset_result %>%
+  transmute(
+    `Mô hình` = Mo_hinh,
+    `Thống kê` = round(Thong_ke, 4),
+    `p-value` = format.pval(
+      P_value,
+      digits = 4,
+      eps = 2.2e-16
+    ),
+    `Quyết định` = Quyet_dinh,
+    `Kết luận` = Ket_luan
+  ) %>%
+  kable(
+    row.names = FALSE,
+    caption = "Kết Quả Kiểm Định Ramsey RESET"
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover"),
+    full_width = FALSE
+  )
+```
+
+```{r reset-residual-plot, echo=TRUE, fig.width=9, fig.height=4.5}
+reset_plot_data <- bind_rows(
+  tibble(
+    Mo_hinh = "OLS (Stepwise AIC)",
+    Gia_tri_du_bao = fitted(ols_stepwise),
+    Phan_du_chuan_hoa = rstandard(ols_stepwise)
+  ),
+  tibble(
+    Mo_hinh = "PCR",
+    Gia_tri_du_bao = fitted(pcr_lm_diag),
+    Phan_du_chuan_hoa = rstandard(pcr_lm_diag)
+  )
+)
+
+ggplot(reset_plot_data, aes(x = Gia_tri_du_bao, y = Phan_du_chuan_hoa)) +
+  geom_point(alpha = 0.4, size = 1.2) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_smooth(method = "loess", formula = y ~ x, se = FALSE, linewidth = 0.9) +
+  facet_wrap(~ Mo_hinh, scales = "free_x") +
+  labs(
+    title = "Kiểm Tra Dạng Hàm Qua Biểu Đồ Phần Dư",
+    subtitle = "Đường LOESS lệch khỏi đường ngang tại 0 cho thấy dấu hiệu phi tuyến",
+    x = "Giá trị dự báo",
+    y = "Phần dư chuẩn hóa"
+  ) +
+  theme_minimal()
+```
+
+**Nhận xét:** Ở cả mô hình OLS Stepwise AIC và PCR, phần dư không phân bố hoàn toàn ngẫu nhiên xung quanh đường ngang tại 0. Đường làm trơn LOESS thể hiện độ cong rõ rệt: phần dư có xu hướng giảm ở vùng giá trị dự báo thấp, tăng trở lại ở vùng trung bình và tiếp tục giảm ở vùng dự báo cao. Điều này cho thấy dạng hàm tuyến tính hiện tại chưa mô tả đầy đủ mối quan hệ giữa các biến giải thích và tỷ lệ tội phạm, phù hợp với kết quả kiểm định Ramsey RESET khi cả hai mô hình đều bác bỏ $H_0$ ở mức ý nghĩa 5%.
+
+Ngoài ra, độ phân tán của phần dư có xu hướng tăng khi giá trị dự báo tăng, đặc biệt ở khoảng giá trị dự báo trung bình, cho thấy mô hình có thể đồng thời tồn tại hiện tượng phương sai sai số thay đổi. Tuy nhiên, kết luận này cần được xác nhận thêm bằng kiểm định Breusch--Pagan.
+
+Như vậy, cả OLS và PCR đều còn dấu hiệu sai dạng hàm. Có thể cân nhắc bổ sung các thành phần phi tuyến như biến bình phương, biến tương tác hoặc spline đối với một số biến giải thích. Tuy nhiên, do mục tiêu chính của nghiên cứu là so sánh khả năng dự báo, việc lựa chọn mô hình cuối cùng vẫn cần dựa trên các chỉ số RMSE, MAE và $R^2$ trên tập validation.
+
+## Kiểm định phương sai sai số không đổi
+
+Kiểm định Breusch--Pagan được sử dụng để kiểm tra giả định phương sai của sai số không thay đổi theo các biến giải thích.
+
+Giả thuyết kiểm định được phát biểu như sau:
+
+$$
+H_0:\operatorname{Var}(\varepsilon_i\mid X_i)=\sigma^2,\quad \forall i.
+$$
+
+$$
+H_1:\operatorname{Var}(\varepsilon_i\mid X_i)\text{ không phải là hằng số}.
+$$
+
+Nếu p-value nhỏ hơn $0.05$, bác bỏ $H_0$ và kết luận rằng mô hình có hiện tượng phương sai sai số thay đổi.
+
+```{r breusch-pagan-test, echo=TRUE}
+# Kiểm định Breusch-Pagan
+bp_ols <- lmtest::bptest(ols_stepwise,studentize = TRUE)
+bp_pcr <- lmtest::bptest(pcr_lm_diag,studentize = TRUE)
+
+bp_result <- tibble(Mo_hinh = c("OLS (Stepwise AIC)","PCR"),
+  Thong_ke = c(unname(bp_ols$statistic),unname(bp_pcr$statistic)),
+  P_value = c(bp_ols$p.value,bp_pcr$p.value
+  )
+) %>%
+  mutate(Quyet_dinh = if_else(P_value < 0.05,"Bác bỏ H0","Chưa bác bỏ H0"),
+    Ket_luan = if_else(
+      P_value < 0.05,
+      "Có bằng chứng về hiện tượng phương sai sai số thay đổi",
+      "Chưa có bằng chứng về hiện tượng phương sai sai số thay đổi"
+    ))
+
+bp_result %>%
+  transmute(
+    `Mô hình` = Mo_hinh,
+    `Thống kê` = round(Thong_ke, 4),
+    `p-value` = format.pval(
+      P_value,
+      digits = 4,
+      eps = 2.2e-16
+    ),
+    `Quyết định` = Quyet_dinh,
+    `Kết luận` = Ket_luan
+  ) %>%
+  kable(
+    row.names = FALSE,
+    caption = "Kết Quả Kiểm Định Breusch--Pagan"
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover"),
+    full_width = FALSE
+  )
+```
+
+Kết quả kiểm định Breusch--Pagan cho thấy cả mô hình OLS Stepwise AIC và PCR đều có p-value nhỏ hơn $2.2\times10^{-16}$. Với mức ý nghĩa $\alpha=0.05$, bác bỏ giả thuyết $H_0$ đối với cả hai mô hình. Như vậy, có bằng chứng thống kê cho thấy phương sai của sai số không đồng nhất, hay giả định phương sai sai số không đổi bị vi phạm ở cả OLS và PCR.
+
+Hiện tượng phương sai sai số thay đổi có thể làm cho sai số chuẩn OLS thông thường bị ước lượng không chính xác, từ đó ảnh hưởng đến khoảng tin cậy và các kiểm định ý nghĩa của hệ số.Tuy nhiên, do mục tiêu chính của là đánh giá khả năng dự báo, việc so sánh các mô hình vẫn được thực hiện dựa trên RMSE, MAE và $R^2$ trên tập validation.
+
+Để minh họa trực quan kết quả kiểm định Breusch--Pagan, biểu đồ Scale--Location được sử dụng nhằm xem xét sự thay đổi của độ phân tán phần dư theo giá trị dự báo.
+
+```{r scale-location-plot, echo=TRUE, fig.width=9, fig.height=4.5}
+scale_location_data <- bind_rows(
+  tibble(
+    Mo_hinh = "OLS (Stepwise AIC)",
+    Gia_tri_du_bao = fitted(ols_stepwise),
+    Can_phan_du = sqrt(abs(rstandard(ols_stepwise)))
+  ),
+  tibble(
+    Mo_hinh = "PCR",
+    Gia_tri_du_bao = fitted(pcr_lm_diag),
+    Can_phan_du = sqrt(abs(rstandard(pcr_lm_diag)))
+  )
+)
+
+ggplot(scale_location_data, aes(x = Gia_tri_du_bao, y = Can_phan_du)) +
+  geom_point(alpha = 0.4, size = 1.2) +
+  geom_smooth(method = "loess", formula = y ~ x, se = FALSE, linewidth = 0.9) +
+  facet_wrap(~ Mo_hinh, scales = "free_x") +
+  labs(
+    title = "Biểu Đồ Scale--Location",
+    subtitle = "Đường LOESS không nằm ngang cho thấy phương sai phần dư thay đổi",
+    x = "Giá trị dự báo",
+    y = expression(sqrt("|Phần dư chuẩn hóa|"))
+  ) +
+  theme_minimal()
+```
+
+
+## Kiểm định phân phối chuẩn của phần dư
+
+Kiểm định Shapiro--Wilk được sử dụng để kiểm tra xem phần dư của mô hình có tuân theo phân phối chuẩn hay không.
+
+Giả thuyết kiểm định được phát biểu như sau:
+
+$$
+H_0:\varepsilon_i\sim N(0,\sigma^2).
+$$
+
+$$
+H_1:\varepsilon_i\text{ không tuân theo phân phối chuẩn}.
+$$
+
+Nếu p-value nhỏ hơn $0.05$, bác bỏ $H_0$ và kết luận rằng phần dư không tuân theo phân phối chuẩn.
+
+Do kiểm định Shapiro--Wilk có thể nhạy với cỡ mẫu lớn, kết quả kiểm định được xem xét kết hợp với biểu đồ Q--Q của phần dư.
+
+```{r shapiro-test, echo=TRUE}
+# Kiểm định Shapiro-Wilk
+shapiro_ols <- shapiro.test(
+  residuals(ols_stepwise)
+)
+
+shapiro_pcr <- shapiro.test(
+  residuals(pcr_lm_diag)
+)
+
+shapiro_result <- tibble(
+  Mo_hinh = c(
+    "OLS (Stepwise AIC)",
+    "PCR"
+  ),
+  Thong_ke = c(
+    unname(shapiro_ols$statistic),
+    unname(shapiro_pcr$statistic)
+  ),
+  P_value = c(
+    shapiro_ols$p.value,
+    shapiro_pcr$p.value
+  )
+) %>%
+  mutate(
+    Quyet_dinh = if_else(
+      P_value < 0.05,
+      "Bác bỏ H0",
+      "Chưa bác bỏ H0"
+    ),
+    Ket_luan = if_else(
+      P_value < 0.05,
+      "Phần dư có dấu hiệu không tuân theo phân phối chuẩn",
+      "Chưa có bằng chứng cho thấy phần dư không tuân theo phân phối chuẩn"
+    )
+  )
+
+shapiro_result %>%
+  transmute(
+    `Mô hình` = Mo_hinh,
+    `Thống kê W` = round(Thong_ke, 4),
+    `p-value` = format.pval(
+      P_value,
+      digits = 4,
+      eps = 2.2e-16
+    ),
+    `Quyết định` = Quyet_dinh,
+    `Kết luận` = Ket_luan
+  ) %>%
+  kable(
+    row.names = FALSE,
+    caption = "Kết Quả Kiểm Định Shapiro--Wilk"
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover"),
+    full_width = FALSE
+  )
+```
+
+**Nhận xét:** Kết quả kiểm định Shapiro--Wilk cho thấy cả mô hình OLS Stepwise AIC và PCR đều có p-value nhỏ hơn $2.2\times10^{-16}$. Với mức ý nghĩa $\alpha=0.05$, bác bỏ giả thuyết $H_0$ đối với cả hai mô hình. Như vậy, phần dư của OLS và PCR đều không tuân theo phân phối chuẩn.
+
+Thống kê $W$ của OLS bằng $0.9425$ và của PCR bằng $0.9319$, đều thấp hơn 1. Tuy nhiên, không nên chỉ dựa vào chênh lệch của thống kê $W$ để kết luận mô hình nào vi phạm giả định nghiêm trọng hơn. Kết quả kiểm định được xem xét thêm thông qua biểu đồ Q--Q của phần dư chuẩn hóa.
+
+```{r qq-plot-residuals, echo=TRUE, fig.width=9, fig.height=4.5}
+qq_data <- bind_rows(
+  tibble(
+    Mo_hinh = "OLS (Stepwise AIC)",
+    Phan_du_chuan_hoa = rstandard(ols_stepwise)
+  ),
+  tibble(
+    Mo_hinh = "PCR",
+    Phan_du_chuan_hoa = rstandard(pcr_lm_diag)
+  )
+)
+
+ggplot(qq_data, aes(sample = Phan_du_chuan_hoa)) +
+  stat_qq(alpha = 0.45, size = 1.2) +
+  stat_qq_line(linewidth = 0.8) +
+  facet_wrap(~ Mo_hinh) +
+  labs(
+    title = "Biểu Đồ Q--Q Của Phần Dư Chuẩn Hóa",
+    subtitle = "Các điểm lệch khỏi đường thẳng cho thấy phần dư không tuân theo phân phối chuẩn",
+    x = "Phân vị lý thuyết",
+    y = "Phân vị của phần dư chuẩn hóa"
+  ) +
+  theme_minimal()
+```
+
+## Kiểm tra đa cộng tuyến giữa các thành phần chính
+
+Trong mô hình PCR, các biến giải thích ban đầu được thay thế bằng các thành phần chính. Theo tính chất của PCA, các thành phần chính được xây dựng trực giao với nhau, do đó không tồn tại đa cộng tuyến giữa các thành phần được đưa vào mô hình.
+
+Mức độ đa cộng tuyến được kiểm tra thông qua hệ số phóng đại phương sai VIF. Với một biến giải thích $X_j$, VIF được xác định bởi:
+
+$$
+\operatorname{VIF}_j=\frac{1}{1-R_j^2},
+$$
+
+trong đó $R_j^2$ là hệ số xác định khi hồi quy biến $X_j$ theo các biến giải thích còn lại.
+
+Do các thành phần chính không tương quan với nhau nên $R_j^2=0$, từ đó:
+
+$$
+\operatorname{VIF}_j=1.
+$$
+
+Vì vậy, VIF của các thành phần chính trong mô hình PCR được kỳ vọng bằng hoặc xấp xỉ 1. Đây là một chỉ số chẩn đoán, không phải kiểm định giả thuyết có p-value.
+
+```{r pcr-vif-check, echo=TRUE}
+# Kiểm tra đa cộng tuyến giữa các thành phần chính trong mô hình PCR
+pcr_vif <- car::vif(pcr_lm_diag)
+
+pcr_vif_result <- tibble(
+  Thanh_phan = names(pcr_vif),
+  VIF = as.numeric(pcr_vif)
+) %>%
+  mutate(
+    Chenh_lech_so_voi_1 = abs(VIF - 1),
+    Danh_gia = if_else(
+      Chenh_lech_so_voi_1 < 1e-10,
+      "Không có đa cộng tuyến",
+      "Kiểm tra lại tính trực giao"
+    )
+  )
+
+pcr_vif_result %>%
+  transmute(
+    `Thành phần chính` = Thanh_phan,
+    `VIF` = round(VIF, 6),
+    `Độ lệch so với 1` = format(Chenh_lech_so_voi_1, scientific = TRUE, digits = 3),
+    `Đánh giá` = Danh_gia
+  ) %>%
+  kable(
+    row.names = FALSE,
+    caption = "Hệ Số VIF Của Các Thành Phần Chính Trong Mô Hình PCR"
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover"),
+    full_width = FALSE
+  )
+```
+
+
+VIF của các thành phần chính đều bằng hoặc xấp xỉ 1, phù hợp với tính chất trực giao của PCA. Vì vậy, mô hình PCR không gặp hiện tượng đa cộng tuyến giữa các thành phần chính được sử dụng.
+
+## Nhận xét về giả định độc lập và ngoại sinh
+
+Bộ dữ liệu là dữ liệu cắt ngang theo các cộng đồng và không có thứ tự thời gian tự nhiên giữa các quan sát. Vì vậy, kiểm định Durbin--Watson không phù hợp trong trường hợp này. Tính độc lập giữa các quan sát được giả định dựa trên cấu trúc dữ liệu, nhưng không thể được kiểm chứng đầy đủ, đặc biệt khi giữa các cộng đồng có thể tồn tại sự phụ thuộc về mặt không gian.
+
+Ngoài ra, giả định ngoại sinh
+
+$$
+E(\varepsilon_i\mid X_i)=0
+$$
+
+không thể được xác nhận hoàn toàn chỉ từ dữ liệu quan sát. Do đó, các kết quả được diễn giải là mối liên hệ thống kê giữa đặc điểm cộng đồng và tỷ lệ tội phạm, không được diễn giải là quan hệ nhân quả.
+
+# Đánh Giá Và So Sánh Các Mô Hình Trên Tập Validation
+
+Các mô hình được đánh giá trên cùng tập validation bằng ba chỉ số:
+
+- **RMSE** đo căn bậc hai của sai số bình phương trung bình và phạt mạnh các dự báo sai lệch lớn; giá trị càng nhỏ càng tốt.
+- **MAE** đo độ lệch tuyệt đối trung bình, dễ diễn giải và ít nhạy với sai số lớn hơn RMSE; giá trị càng nhỏ càng tốt.
+- **$R^2$ trên validation** đo tỷ lệ biến thiên của `ViolentCrimesPerPop` được mô hình giải thích trên dữ liệu chưa dùng để huấn luyện; giá trị càng lớn càng tốt.
+
+Do biến phản hồi đã được chuẩn hóa trong khoảng $[0,1]$, RMSE và MAE trong bảng dưới đây cũng được hiểu trên thang chuẩn hóa này.
+
+```{r part-e-validation-metrics}
+regression_metrics <- function(model_name, actual, predicted) {
+  actual <- as.numeric(actual)
+  predicted <- as.numeric(predicted)
+
+  if (length(actual) != length(predicted)) {
+    stop("Số quan sát thực tế và dự báo không bằng nhau ở mô hình ", model_name)
+  }
+
+  sse <- sum((actual - predicted)^2)
+  sst <- sum((actual - mean(actual))^2)
+
+  tibble(
+    Model = model_name,
+    RMSE = sqrt(mean((actual - predicted)^2)),
+    MAE = mean(abs(actual - predicted)),
+    R2 = 1 - sse / sst
+  )
+}
+
+y_valid_actual <- valid_df$ViolentCrimesPerPop
+
+model_compare_valid <- bind_rows(
+  regression_metrics("OLS (Stepwise AIC)", y_valid_actual, pred_step_valid),
+  regression_metrics("PCR", y_valid_actual, pred_pcr_valid),
+  regression_metrics("Ridge", y_valid_actual, pred_ridge_valid),
+  regression_metrics("LASSO", y_valid_actual, pred_lasso_valid)
+) %>%
+  arrange(RMSE, MAE, desc(R2))
+
+best_rmse_model <- model_compare_valid$Model[which.min(model_compare_valid$RMSE)]
+best_mae_model <- model_compare_valid$Model[which.min(model_compare_valid$MAE)]
+best_r2_model <- model_compare_valid$Model[which.max(model_compare_valid$R2)]
+selected_model <- model_compare_valid$Model[1]
+
+model_compare_display <- model_compare_valid %>%
+  mutate(
+    RMSE = round(RMSE, 4),
+    MAE = round(MAE, 4),
+    R2 = round(R2, 4)
+  )
+
+kable(model_compare_display, row.names = FALSE,
+      caption = "So Sánh Hiệu Năng Của Các Mô Hình Trên Tập Validation",
+      col.names = c("Mô hình", "RMSE", "MAE", "R²")) %>%
+  kable_styling(bootstrap_options = c("striped", "hover")) %>%
+  row_spec(1, bold = TRUE, background = "#EAF3DE")
+```
+
+Trên tập validation, Ridge có hiệu năng dự báo tốt nhất với RMSE và MAE thấp nhất, lần lượt là $0.1393$ và $0.0942$, đồng thời đạt $R^2$ cao nhất bằng $0.6582$. LASSO xếp thứ hai với kết quả khá gần Ridge.
+
+Mặc dù PCR chỉ sử dụng một số thành phần chính thay cho toàn bộ không gian biến ban đầu, mô hình vẫn đạt RMSE bằng $0.1423$, MAE bằng $0.0981$ và $R^2$ bằng $0.6432$. Hiệu năng của PCR chỉ thấp hơn Ridge một mức nhỏ và tốt hơn nhẹ so với OLS Stepwise AIC. Kết quả này cho thấy PCR đạt được sự cân bằng tương đối tốt giữa khả năng giảm số chiều và hiệu năng dự báo, đồng thời khắc phục đa cộng tuyến nhờ các thành phần chính trực giao.
+
+Nhìn chung, Ridge được lựa chọn nếu ưu tiên độ chính xác dự báo cao nhất .Tuy nhiên, PCR vẫn là một phương án đáng cân nhắc khi muốn biểu diễn dữ liệu bằng số lượng thành phần nhỏ hơn mà không làm giảm đáng kể khả năng dự báo.
+
+# Phân Tích Các Thành Phần Chính Thông Qua Ma Trận Tải
+
+Mô hình PCR cuối cùng sử dụng 16 thành phần chính được lựa chọn bằng cross-validation. Phần này sử dụng ma trận tải để xác định các thành phần chính được hình thành từ những biến gốc nào.
+
+Ma trận tải đầy đủ được lưu trong `pca_model$rotation`. Mỗi cột của ma trận tương ứng với một thành phần chính, còn mỗi phần tử là loading của một biến gốc trên thành phần đó. Biến có trị tuyệt đối loading càng lớn thì đóng góp vào thành phần chính càng mạnh. Các biến có loading cùng dấu biến thiên cùng phía, trong khi các biến có loading trái dấu thể hiện hai chiều đặc điểm đối lập.
+
+Do ma trận tải đầy đủ gồm nhiều biến và 16 thành phần, phần trình bày tập trung vào bốn PC đầu tiên. Đối với mỗi PC, năm biến có trị tuyệt đối loading lớn nhất được sử dụng để hỗ trợ diễn giải. Việc chỉ trình bày bốn PC đầu không làm thay đổi mô hình PCR cuối cùng, vốn vẫn sử dụng đầy đủ 16 thành phần.
+
+## Phạm vi diễn giải các thành phần chính
+
+Mô hình PCR sử dụng 16 thành phần chính được lựa chọn theo quy tắc 1-sigma từ cross-validation. Do ma trận tải đầy đủ có kích thước lớn, phần diễn giải tập trung vào bốn PC đầu tiên, là các thành phần lần lượt giữ nhiều phương sai nhất của tập biến $X$. Việc giới hạn phạm vi trình bày không làm thay đổi mô hình PCR cuối cùng, vốn vẫn sử dụng đầy đủ 16 thành phần.
+
+```{r part-f-prepare, echo=TRUE}
+# Tạo các đại lượng cần thiết nếu chưa tồn tại
+if (!exists("var_explained")) {
+  eig_vals <- pca_model$sdev^2
+  var_explained <- eig_vals / sum(eig_vals)
+}
+
+if (!exists("cum_var")) {
+  cum_var <- cumsum(var_explained)
+}
+
+if (!exists("group_lookup")) {
+  group_lookup <- stack(var_groups) %>%
+    transmute(
+      Variable = as.character(values),
+      Nhom_bien = as.character(ind)
+    )
+}
+
+# Nếu chưa có hàm gắn nhãn tiếng Việt thì giữ nguyên tên biến
+if (!exists("label_vn_en")) {
+  label_vn_en <- function(x) x
+}
+
+# Số PC được sử dụng trong mô hình PCR cuối cùng
+ncomp_loadings <- min(
+  as.integer(n_cv_onesigma),
+  ncol(pca_model$x)
+)
+
+# Tương quan giữa từng PC trong mô hình và biến phản hồi trên tập train
+pc_cor_y <- sapply(seq_len(ncomp_loadings), function(j) {
+  cor(
+    pca_model$x[, j],
+    train_df$ViolentCrimesPerPop,
+    use = "complete.obs"
+  )
+})
+
+# Thông tin của toàn bộ các PC được sử dụng trong mô hình
+pc_profile <- tibble(
+  PC_number = seq_len(ncomp_loadings),
+  PC = paste0("PC", seq_len(ncomp_loadings)),
+  Variance_X = var_explained[seq_len(ncomp_loadings)] * 100,
+  Cumulative_X = cum_var[seq_len(ncomp_loadings)] * 100,
+  Correlation_Y = pc_cor_y
+)
+
+# Mô hình cuối dùng đầy đủ 16 PC, nhưng phần diễn giải tập trung vào 4 PC đầu
+pc_interpret <- seq_len(min(4, ncomp_loadings))
+```
+
+```{r part-f-pc-profile, echo=TRUE}
+pc_profile_display <- pc_profile %>%
+  filter(PC_number %in% pc_interpret) %>%
+  arrange(PC_number) %>%
+  transmute(
+    PC,
+    `Phương sai X (%)` = round(Variance_X, 2),
+    `Phương sai X tích lũy (%)` = round(Cumulative_X, 2),
+    `Tương quan với Y` = round(Correlation_Y, 3)
+  )
+
+kable(
+  pc_profile_display,
+  row.names = FALSE,
+  caption = "Thông Tin Của Bốn Thành Phần Chính Đầu Tiên"
+) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover"),
+    full_width = FALSE
+  )
+```
+
+**Nhận xét:** Tỷ lệ phương sai phản ánh lượng thông tin của tập biến $X$ được mỗi PC lưu giữ, trong khi tương quan PC--Y phản ánh mức liên hệ mô tả của PC với tỷ lệ tội phạm. Một PC giải thích nhiều phương sai của $X$ chưa chắc có liên hệ mạnh với $Y$; ngược lại, một PC có phương sai nhỏ hơn vẫn có thể chứa thông tin hữu ích cho dự báo.
+
+## Các biến có loading lớn nhất trong từng PC
+
+Đối với mỗi PC được chọn, năm biến có trị tuyệt đối của loading lớn nhất được sử dụng để xác định nội dung chính của thành phần đó.
+
+```{r part-f-top-loadings, echo=TRUE}
+top_loading_one_pc <- function(pc_number, n = 5) {
+  loading_vector <- pca_model$rotation[, pc_number]
+
+  selected_index <- order(
+    abs(loading_vector),
+    decreasing = TRUE
+  )[seq_len(min(n, length(loading_vector)))]
+
+  tibble(
+    PC_number = pc_number,
+    PC = paste0("PC", pc_number),
+    Variable_raw = names(loading_vector)[selected_index],
+    Loading = as.numeric(loading_vector[selected_index])
+  )
+}
+
+top_loadings_f <- map_dfr(
+  pc_interpret,
+  top_loading_one_pc,
+  n = 5
+) %>%
+  left_join(
+    pc_profile %>%
+      select(PC_number, Correlation_Y),
+    by = "PC_number"
+  ) %>%
+  left_join(
+    group_lookup,
+    by = c("Variable_raw" = "Variable")
+  ) %>%
+  mutate(
+    Nhom_bien = replace_na(
+      as.character(Nhom_bien),
+      "Chưa phân nhóm"
+    ),
+    Variable = label_vn_en(Variable_raw)
+  )
+
+loadings_display <- top_loadings_f %>%
+  transmute(
+    PC,
+    `Biến` = Variable,
+    `Nhóm biến` = Nhom_bien,
+    `Loading` = round(Loading, 3),
+    `Trị tuyệt đối loading` = round(abs(Loading), 3),
+    `Tương quan PC-Y` = round(Correlation_Y, 3)
+  )
+
+kable(
+  loadings_display,
+  row.names = FALSE,
+  caption = "Năm Biến Có Trị Tuyệt Đối Loading Lớn Nhất Trong Từng PC"
+) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover"),
+    full_width = FALSE
+  ) %>%
+  collapse_rows(
+    columns = 1,
+    valign = "top"
+  )
+```
+
+**PC1** chủ yếu phản ánh điều kiện kinh tế và cấu trúc gia đình. Thành phần này đối lập giữa nhóm thu nhập, thu nhập đầu tư và tỷ lệ trẻ sống cùng đầy đủ cha mẹ với tỷ lệ dân số dưới chuẩn nghèo. Vì vậy, PC1 có thể được diễn giải là chiều đặc trưng về **điều kiện kinh tế và mức độ ổn định gia đình**.
+
+**PC2** được hình thành gần như hoàn toàn từ các biến về tỷ lệ dân số nhập cư trong 3, 5, 8 và 10 năm gần đây cùng tỷ lệ dân số sinh ở nước ngoài. Do đó, PC2 đại diện cho **đặc điểm nhập cư và mức độ biến động dân cư** của cộng đồng.
+
+**PC3** có loading lớn ở các biến số người mỗi hộ, số người trung bình trong gia đình, số người trong nhà tự sở hữu và tỷ lệ hộ đông người. Thành phần này chủ yếu phản ánh **quy mô hộ gia đình và mật độ cư trú trong nhà ở**.
+
+**PC4** thể hiện sự đối lập giữa nhóm dân số trẻ và nhóm biến phản ánh thời gian cư trú lâu dài tại cùng nhà hoặc cùng thành phố. Vì vậy, PC4 có thể được xem là chiều đặc trưng về **cơ cấu tuổi và mức độ ổn định nơi cư trú**.
+
+Như vậy, bốn thành phần đầu đã tổng hợp các biến gốc thành những chiều nội dung tương đối rõ, gồm điều kiện kinh tế -- gia đình, nhập cư, quy mô hộ và cơ cấu tuổi -- ổn định cư trú .Việc diễn giải này dựa trên độ lớn và quan hệ dấu giữa các loading trong từng PC, chưa phản ánh trực tiếp mức độ liên hệ của từng biến với tỷ lệ tội phạm.
+
+## Mức đóng góp của các nhóm biến
+
+Với mỗi PC, tổng bình phương các loading bằng 1. Vì vậy, tổng loading bình phương của một nhóm được sử dụng để mô tả tỷ trọng của nhóm đó trong thành phần chính:
+
+$$
+C_{gk}=\sum_{j\in g}l_{jk}^{2},
+$$
+
+trong đó $l_{jk}$ là loading của biến $j$ trên PC thứ $k$.
+
+Do số biến giữa các nhóm không bằng nhau, bảng đồng thời trình bày loading bình phương trung bình để tránh chỉ dựa vào quy mô của nhóm.
+
+```{r part-f-group-loadings, echo=TRUE}
+loading_group <- as.data.frame(
+  pca_model$rotation[, pc_interpret, drop = FALSE]
+) %>%
+  rownames_to_column("Variable_raw") %>%
+  pivot_longer(
+    -Variable_raw,
+    names_to = "PC",
+    values_to = "Loading"
+  ) %>%
+  mutate(
+    PC_number = as.integer(str_remove(PC, "PC"))
+  ) %>%
+  left_join(
+    group_lookup,
+    by = c("Variable_raw" = "Variable")
+  ) %>%
+  mutate(
+    Nhom_bien = replace_na(
+      as.character(Nhom_bien),
+      "Chưa phân nhóm"
+    )
+  ) %>%
+  group_by(PC_number, PC, Nhom_bien) %>%
+  summarise(
+    So_bien = n(),
+    Tong_loading2 = sum(Loading^2),
+    Loading2_TB = mean(Loading^2),
+    .groups = "drop"
+  )
+
+# Ba nhóm đóng góp tổng loading² lớn nhất trong mỗi PC
+loading_group_top <- loading_group %>%
+  group_by(PC_number) %>%
+  slice_max(
+    Tong_loading2,
+    n = 3,
+    with_ties = FALSE
+  ) %>%
+  ungroup() %>%
+  arrange(PC_number, desc(Tong_loading2))
+
+loading_group_top %>%
+  transmute(
+    PC,
+    `Nhóm biến nổi bật` = Nhom_bien,
+    `Số biến` = So_bien,
+    `Tỷ trọng loading² (%)` = round(Tong_loading2 * 100, 1),
+    `Loading² trung bình` = round(Loading2_TB, 4)
+  ) %>%
+  kable(
+    row.names = FALSE,
+    caption = "Ba Nhóm Biến Đóng Góp Nhiều Nhất Trong Từng PC"
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover")
+  ) %>%
+  collapse_rows(
+    columns = 1,
+    valign = "top"
+  )
+```
+
+Kết quả cho thấy cấu trúc của các thành phần chính được hình thành từ những nhóm biến khác nhau. Ở PC1, nhóm nhà ở có tỷ trọng loading bình phương lớn nhất do chứa nhiều biến, nhưng xét loading bình phương trung bình thì nhóm thu nhập đóng góp nổi bật hơn. PC2 chủ yếu đại diện cho nhóm nhập cư và ổn định dân cư, với cả tỷ trọng tổng và mức đóng góp trung bình đều cao nhất. PC3 tập trung vào các đặc điểm nhà ở và cấu trúc gia đình, trong đó nhóm cấu trúc gia đình có loading bình phương trung bình lớn hơn. Đối với PC4, nhóm nhập cư và ổn định dân cư chiếm tỷ trọng tổng lớn nhất, còn nhóm dân số và chủng tộc có mức đóng góp trung bình cao nhất.
+
+Các nhóm nhà ở, cấu trúc gia đình, thu nhập, nhập cư và đặc điểm dân số là những nhóm giữ vai trò chính trong việc hình thành bốn thành phần đầu. Tuy nhiên, các tỷ trọng này chỉ phản ánh mức đóng góp vào cấu trúc của từng PC, không trực tiếp thể hiện mức độ ảnh hưởng đến tỷ lệ tội phạm.
+
+## Trực quan hóa ma trận tải
+
+Heatmap dưới đây thể hiện dấu và độ lớn loading của các biến nổi bật. Màu có cường độ mạnh hơn tương ứng với trị tuyệt đối loading lớn hơn; hai phía màu khác nhau thể hiện loading trái dấu.
+
+```{r part-f-loading-heatmap, echo=TRUE, fig.width=9, fig.height=7}
+heatmap_variables <- unique(top_loadings_f$Variable_raw)
+
+loading_heatmap <- as.data.frame(
+  pca_model$rotation[
+    heatmap_variables,
+    paste0("PC", pc_interpret),
+    drop = FALSE
+  ]
+) %>%
+  rownames_to_column("Variable_raw") %>%
+  pivot_longer(
+    -Variable_raw,
+    names_to = "PC",
+    values_to = "Loading"
+  ) %>%
+  mutate(
+    Variable = label_vn_en(Variable_raw),
+    Variable = factor(
+      Variable,
+      levels = rev(label_vn_en(heatmap_variables))
+    ),
+    PC = factor(
+      PC,
+      levels = paste0("PC", pc_interpret)
+    )
+  )
+
+ggplot(
+  loading_heatmap,
+  aes(
+    x = PC,
+    y = Variable,
+    fill = Loading
+  )
+) +
+  geom_tile(color = "white") +
+  scale_fill_gradient2(
+    low = "#2166AC",
+    mid = "white",
+    high = "#B2182B",
+    midpoint = 0
+  ) +
+  labs(
+    title = "Ma Trận Tải Của Các Biến Nổi Bật",
+    subtitle = "Màu sắc thể hiện dấu và độ lớn của loading",
+    x = "Thành phần chính",
+    y = NULL,
+    fill = "Loading"
+  ) +
+  theme_minimal(base_size = 10) +
+  theme(
+    panel.grid = element_blank(),
+    axis.text.y = element_text(size = 7)
+  )
+```
+## Thảo luận ý nghĩa của các nhóm biến liên quan đến tỷ lệ tội phạm
+
+Kết hợp cấu trúc loading với tương quan PC--Y cho thấy nhóm **thu nhập, nghèo đói và cấu trúc gia đình** có liên hệ nổi bật nhất với tỷ lệ tội phạm thông qua PC1, với $r=0.621$. Theo chiều dấu hiện tại, mức nghèo cao hơn đi cùng với thu nhập thấp hơn và tỷ lệ trẻ sống cùng đầy đủ cha mẹ thấp hơn, đồng thời gắn với tỷ lệ tội phạm cao hơn.
+
+Nhóm **nhập cư và ổn định dân cư** chủ yếu xuất hiện trong PC2 và PC4, nhưng mức tương quan với tỷ lệ tội phạm chỉ ở mức yếu, lần lượt là $0.273$ và $-0.202$. Nhóm **nhà ở, quy mô hộ và cấu trúc gia đình** cũng đóng góp đáng kể vào PC1 và PC3, trong đó PC3 có tương quan yếu với tỷ lệ tội phạm, $r=0.202$.
+
+Nhìn chung, điều kiện kinh tế, nghèo đói và sự ổn định gia đình là nhóm có mối liên hệ rõ nhất với tỷ lệ tội phạm; các đặc điểm về nhà ở, nhập cư, cơ cấu tuổi và ổn định cư trú cung cấp thêm thông tin nhưng có mức liên hệ thấp hơn. Kết quả chỉ phản ánh mối liên hệ thống kê ở cấp cộng đồng, không hàm ý quan hệ nhân quả.
+
+
 
