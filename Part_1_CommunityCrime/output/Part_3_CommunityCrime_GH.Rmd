@@ -1,1 +1,270 @@
+# Chuyển Hệ Số Hồi Quy PCR Về Không Gian Các Biến Gốc
 
+Mô hình PCR cuối cùng được ước lượng trên `r n_cv_onesigma` thành phần chính đầu tiên (mục trước), nghĩa là các hệ số hồi quy thu được (`gamma`) chỉ có ý nghĩa trực tiếp trong **không gian các thành phần chính** — một hệ trục nhân tạo, khó diễn giải về mặt chuyên môn. Phần này trình bày cách quy đổi các hệ số đó trở lại **không gian các biến dự báo gốc** (`X`), qua đó cho phép diễn giải ảnh hưởng của từng biến kinh tế — xã hội — nhân khẩu học đến tỷ lệ tội phạm bạo lực theo cùng cách hiểu như một mô hình hồi quy tuyến tính thông thường.
+
+```{r part-g-setup, echo=TRUE}
+# Đảm bảo các đối tượng cần thiết đã tồn tại (phòng trường hợp render độc lập)
+if (!exists("group_lookup")) {
+  group_lookup <- stack(var_groups) %>%
+    transmute(
+      Variable = as.character(values),
+      Nhom_bien = as.character(ind)
+    )
+}
+
+if (!exists("label_vn_en")) {
+  label_vn_en <- function(x) x
+}
+```
+
+## Tính hệ số hồi quy trên không gian biến gốc
+
+Với $Z_j=(X_j-\bar X_j)/s_j$ là biến đã chuẩn hóa dùng trong PCA ($\bar X_j$, $s_j$ tính trên tập train), hệ số PCR trên các PC ($\hat{\boldsymbol\gamma}$) được quy đổi qua hai bước: $\tilde{\boldsymbol\beta}=P\hat{\boldsymbol\gamma}$ (hệ số trên $Z$, $P$ là ma trận tải $m$ PC đã chọn), sau đó $\beta_j=\tilde\beta_j/s_j$ và $\beta_0=\hat\gamma_0-\sum_j\tilde\beta_j\bar X_j/s_j$ (hệ số trên biến gốc $X_j$, thang $[0,1]$ theo chuẩn hóa gốc của UCI).
+
+```{r part-g-compute-beta, echo=TRUE}
+# Gamma: hệ số hồi quy của PCR theo các PC đã chọn (không tính hệ số chặn)
+gamma_pcr     <- coef(pcr_lm_diag)[-1]
+intercept_pcr <- unname(coef(pcr_lm_diag)[1])
+
+# Ma trận tải P (p x m): loading của từng biến gốc lên m thành phần chính đã chọn
+P_loadings <- pca_model$rotation[, seq_len(n_cv_onesigma), drop = FALSE]
+
+# Hệ số trên không gian biến ĐÃ CHUẨN HÓA Z = (X - mean)/sd
+beta_tilde <- as.numeric(P_loadings %*% matrix(gamma_pcr, ncol = 1))
+names(beta_tilde) <- rownames(P_loadings)
+
+# Trung bình / độ lệch chuẩn của biến gốc trên tập train (đã lưu sẵn trong pca_model)
+mean_train_x <- pca_model$center
+sd_train_x   <- pca_model$scale
+
+# Chuyển hệ số về không gian biến gốc X
+beta_raw  <- beta_tilde / sd_train_x
+beta0_raw <- intercept_pcr - sum(beta_tilde * mean_train_x / sd_train_x)
+
+cat("Hệ số chặn (beta0) trên không gian biến gốc :", round(beta0_raw, 5), "\n")
+cat("Số biến gốc có hệ số quy đổi                :", length(beta_raw), "\n")
+```
+
+## Kiểm chứng phép chuyển đổi
+
+Nếu phép quy đổi chính xác, dự báo tính thủ công bằng $\beta_0+\sum_j\beta_jX_j$ trên tập validation phải trùng khớp (đến sai số làm tròn) với dự báo gốc của mô hình PCR (`pcr_final`, dùng hàm `predict.mvr`):
+
+```{r part-g-verify, echo=TRUE}
+X_valid_raw <- as.matrix(valid_df[, names(beta_raw), drop = FALSE])
+
+pred_manual_valid <- as.numeric(beta0_raw + X_valid_raw %*% beta_raw)
+pred_pcr_valid_num <- as.numeric(pred_pcr_valid)
+
+verify_diff <- pred_manual_valid - pred_pcr_valid_num
+
+verify_summary <- tibble(
+  Chi_so = c(
+    "Sai khác tuyệt đối lớn nhất",
+    "Sai khác tuyệt đối trung bình",
+    "Tương quan giữa hai dự báo"
+  ),
+  Gia_tri = c(
+    format(max(abs(verify_diff)), scientific = TRUE, digits = 3),
+    format(mean(abs(verify_diff)), scientific = TRUE, digits = 3),
+    format(round(cor(pred_manual_valid, pred_pcr_valid_num), 10))
+  )
+)
+
+kable(
+  verify_summary,
+  row.names = FALSE,
+  col.names = c("Chỉ số kiểm chứng", "Giá trị"),
+  caption = "Đối Chiếu Dự Báo Thủ Công (Hệ Số Quy Đổi) Với Dự Báo Gốc Của PCR"
+) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+```
+
+**Nhận xét:** Sai khác chỉ ở mức sai số số học, tương quan giữa hai dự báo xấp xỉ $1$ — xác nhận phép quy đổi hệ số là chính xác về mặt đại số.
+
+## Các biến có ảnh hưởng lớn nhất sau khi quy đổi
+
+Vì các biến gốc $X_j$ tuy cùng nằm trong $[0,1]$ nhưng có phương sai khác nhau, hệ số $\beta_j$ (đơn vị: thay đổi của $Y$ khi $X_j$ tăng 1 đơn vị thang $[0,1]$) chưa phản ánh công bằng mức độ quan trọng tương đối giữa các biến. Vì vậy, bảng dưới đây trình bày đồng thời:
+
+- $\beta_j$ — hệ số trên **thang đo gốc** $[0,1]$ của biến, dùng để viết phương trình dự báo cuối cùng;
+- $\tilde\beta_j=\beta_j\times s_j$ — hệ số trên **thang đã chuẩn hóa** (thay đổi của $Y$ khi $X_j$ tăng 1 độ lệch chuẩn), dùng để so sánh **tầm quan trọng tương đối** giữa các biến một cách công bằng hơn.
+
+```{r part-g-table, echo=TRUE}
+beta_table <- tibble(
+  Variable_raw = names(beta_raw),
+  Beta_raw   = as.numeric(beta_raw),
+  Beta_std   = as.numeric(beta_tilde)
+) %>%
+  left_join(group_lookup, by = c("Variable_raw" = "Variable")) %>%
+  mutate(
+    Nhom_bien = replace_na(as.character(Nhom_bien), "Chưa phân nhóm"),
+    Variable  = label_vn_en(Variable_raw)
+  ) %>%
+  arrange(desc(abs(Beta_std)))
+
+beta_table_top <- beta_table %>% slice_head(n = 15)
+
+beta_table_top %>%
+  transmute(
+    `Biến` = Variable,
+    `Nhóm biến` = Nhom_bien,
+    `Hệ số chuẩn hóa` = round(Beta_std, 4),
+    `Hệ số trên biến gốc [0,1]` = round(Beta_raw, 4)
+  ) %>%
+  kable(
+    row.names = FALSE,
+    caption = "15 Biến Có |Hệ Số Chuẩn Hóa| Lớn Nhất Sau Khi Quy Đổi PCR Về Không Gian Biến Gốc"
+  ) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+```
+
+```{r part-g-plot, echo=TRUE, fig.width=8.5, fig.height=6.5}
+ggplot(
+  beta_table_top,
+  aes(x = reorder(Variable, abs(Beta_std)), y = Beta_std, fill = Beta_std > 0)
+) +
+  geom_col() +
+  coord_flip() +
+  scale_fill_manual(
+    values = c("TRUE" = "steelblue", "FALSE" = "tomato"),
+    guide = "none"
+  ) +
+  labs(
+    title = "Hệ Số Chuẩn Hóa Của PCR Sau Khi Quy Đổi Về Không Gian Biến Gốc",
+    subtitle = "15 biến có |hệ số chuẩn hóa| lớn nhất — xanh: ảnh hưởng cùng chiều, đỏ: ảnh hưởng ngược chiều",
+    x = NULL,
+    y = "Hệ số chuẩn hóa (thay đổi của Y khi X tăng 1 độ lệch chuẩn)"
+  ) +
+  theme_minimal(base_size = 11)
+```
+
+## Diễn giải ảnh hưởng của các biến đến tỷ lệ tội phạm bạo lực
+
+Biến có hệ số chuẩn hóa lớn nhất về trị tuyệt đối là `r beta_table_top$Variable[1]`, với $\tilde\beta=`r round(beta_table_top$Beta_std[1],3)`$ và hệ số trên thang gốc $\beta=`r round(beta_table_top$Beta_raw[1],4)`$ — ảnh hưởng `r if (beta_table_top$Beta_std[1] > 0) "cùng chiều" else "ngược chiều"` đến `ViolentCrimesPerPop`. Đứng thứ hai và thứ ba là `r beta_table_top$Variable[2]` (`r if (beta_table_top$Beta_std[2] > 0) "cùng chiều" else "ngược chiều"`) và `r beta_table_top$Variable[3]` (`r if (beta_table_top$Beta_std[3] > 0) "cùng chiều" else "ngược chiều"`). Kết quả này thống nhất với cấu trúc loading của PC1 đã phân tích ở mục trước: PC1 vừa giải thích nhiều phương sai nhất của $X$, vừa có tương quan mạnh nhất với $Y$ trong số các PC được chọn, nên các biến thuộc nhóm **thu nhập, nghèo đói và cấu trúc gia đình** tiếp tục chiếm phần lớn vị trí đầu bảng sau khi quy đổi ngược về không gian biến gốc.
+
+### Mức đóng góp của từng nhóm biến vào dự báo
+
+Để đi sâu hơn vào từng nhóm nội dung đã phân loại ở mục Phân Loại Biến, tổng bình phương hệ số chuẩn hóa $\sum_{j\in g}\tilde\beta_j^2$ của mỗi nhóm $g$ được dùng làm thước đo mức đóng góp tổng thể của nhóm đó vào phần biến thiên của $\hat Y$ do PCR giải thích — cùng logic đã dùng để đo tỷ trọng đóng góp của các nhóm biến vào từng PC ở mục trước, nhưng lần này áp dụng trực tiếp lên hệ số ảnh hưởng đến $Y$ thay vì lên cấu trúc nội tại của $X$.
+
+```{r part-g-group-importance, echo=TRUE}
+group_importance <- beta_table %>%
+  filter(Nhom_bien != "Chưa phân nhóm") %>%
+  group_by(Nhom_bien) %>%
+  summarise(
+    So_bien = n(),
+    Beta_std_TB_tuyet_doi = mean(abs(Beta_std)),
+    Beta_std_Tong_binh_phuong = sum(Beta_std^2),
+    So_bien_cung_chieu = sum(Beta_std > 0),
+    So_bien_nguoc_chieu = sum(Beta_std < 0),
+    .groups = "drop"
+  ) %>%
+  mutate(Ty_trong_pct = Beta_std_Tong_binh_phuong / sum(Beta_std_Tong_binh_phuong) * 100) %>%
+  arrange(desc(Beta_std_Tong_binh_phuong))
+
+kable(
+  group_importance %>%
+    transmute(
+      `Nhóm biến` = Nhom_bien,
+      `Số biến` = So_bien,
+      `Tổng beta² chuẩn hóa` = round(Beta_std_Tong_binh_phuong, 3),
+      `Tỷ trọng (%)` = round(Ty_trong_pct, 1),
+      `|beta| trung bình` = round(Beta_std_TB_tuyet_doi, 4),
+      `Số biến (+)` = So_bien_cung_chieu,
+      `Số biến (-)` = So_bien_nguoc_chieu
+    ),
+  row.names = FALSE,
+  caption = "Mức Đóng Góp Của Từng Nhóm Biến Vào Dự Báo Tỷ Lệ Tội Phạm (Sau Khi Quy Đổi PCR Về Không Gian Biến Gốc)"
+) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+```{r part-g-group-top, echo=TRUE}
+sign_txt <- function(x) if (x > 0) "cùng chiều (+)" else "ngược chiều (–)"
+
+top_var_in_group <- function(g, n = 3) {
+  beta_table %>%
+    filter(Nhom_bien == g) %>%
+    arrange(desc(abs(Beta_std))) %>%
+    slice_head(n = n)
+}
+
+grp_income  <- top_var_in_group("Thu nhập")
+grp_poverty <- top_var_in_group("Nguồn thu nhập & Nghèo đói")
+grp_family  <- top_var_in_group("Cấu trúc Gia đình & Xã hội")
+grp_demo    <- top_var_in_group("Dân số & Chủng tộc")
+grp_edu     <- top_var_in_group("Giáo dục, Việc làm & Nghề nghiệp")
+grp_housing <- top_var_in_group("Nhà ở: Loại hình, Sở hữu & Chi phí")
+grp_immig   <- top_var_in_group("Nhập cư, Ổn định Dân cư & Vô gia cư")
+grp_police  <- top_var_in_group("Cảnh sát & Thực thi Pháp luật (LEMAS)")
+
+rank_of <- function(g) which(group_importance$Nhom_bien == g)
+share_of <- function(g) round(group_importance$Ty_trong_pct[group_importance$Nhom_bien == g], 1)
+```
+
+**Nhóm Thu nhập** (hạng `r rank_of("Thu nhập")`/8 nhóm, chiếm `r share_of("Thu nhập")`% tổng $\sum\tilde\beta^2$) có ảnh hưởng lớn nhất đến từ `r grp_income$Variable[1]` ($\tilde\beta=`r round(grp_income$Beta_std[1],3)`$,`r sign_txt(grp_income$Beta_std[1])`) và `r grp_income$Variable[2]`(`r sign_txt(grp_income\$Beta_std[2])\`). Mức thu nhập hộ gia đình càng cao càng liên hệ với tỷ lệ tội phạm thấp hơn — phù hợp với lý thuyết căng thẳng xã hội (social strain), theo đó thiếu hụt nguồn lực kinh tế làm gia tăng động cơ và cơ hội phạm tội bạo lực trong cộng đồng.
+
+**Nhóm Nguồn thu nhập & Nghèo đói** (hạng `r rank_of("Nguồn thu nhập & Nghèo đói")`/8, chiếm `r share_of("Nguồn thu nhập & Nghèo đói")`%) bổ sung trực tiếp cho nhóm thu nhập: biến ảnh hưởng mạnh nhất là `r grp_poverty$Variable[1]` (`r sign_txt(grp_poverty$Beta_std[1])`), phản ánh tỷ lệ dân số dưới chuẩn nghèo càng cao thì tỷ lệ tội phạm bạo lực dự báo càng lớn. Hai nhóm Thu nhập và Nghèo đói cùng đo các mặt khác nhau của một khái niệm chung — điều kiện kinh tế cộng đồng — nên việc cả hai cùng xếp hạng cao và cùng chiều dấu logic (thu nhập ngược chiều, nghèo đói cùng chiều) không phải trùng hợp mà là hệ quả trực tiếp của cấu trúc PC1 đã nhận diện ở mục trước.
+
+**Nhóm Cấu trúc Gia đình & Xã hội** (hạng `r rank_of("Cấu trúc Gia đình & Xã hội")`/8, chiếm `r share_of("Cấu trúc Gia đình & Xã hội")`%) có biến nổi bật là `r grp_family$Variable[1]` (`r sign_txt(grp_family$Beta_std[1])`) và `r grp_family$Variable[2]` (`r sign_txt(grp_family$Beta_std[2])`). Các biến đo tỷ lệ trẻ sống cùng đầy đủ cha mẹ có xu hướng liên hệ ngược chiều với tội phạm, trong khi các biến đo tỷ lệ ly hôn/sinh ngoài giá thú có xu hướng liên hệ cùng chiều — nhất quán với giả thuyết kiểm soát xã hội không chính thức (informal social control), theo đó cấu trúc gia đình ổn định góp phần giám sát và định hướng hành vi thanh thiếu niên trong cộng đồng.
+
+**Nhóm Dân số & Chủng tộc** (hạng `r rank_of("Dân số & Chủng tộc")`/8, chiếm `r share_of("Dân số & Chủng tộc")`%) có đại diện lớn nhất là `r grp_demo$Variable[1]` (`r sign_txt(grp_demo$Beta_std[1])`). Cần đọc kết quả của nhóm này một cách thận trọng: đây là dữ liệu **tổng hợp ở cấp cộng đồng** (aggregate), hệ số chỉ phản ánh việc các cộng đồng có tỷ lệ nhân khẩu nhất định cao hơn thì trung bình có tỷ lệ tội phạm ghi nhận cao/thấp hơn tương ứng — không suy diễn được xuống cấp độ cá nhân, và bản thân mối liên hệ này nhiều khả năng là hệ quả gián tiếp của các yếu tố cấu trúc khác đã kiểm soát một phần trong mô hình (nghèo đói, giáo dục, nhà ở) hơn là một ảnh hưởng độc lập.
+
+**Nhóm Giáo dục, Việc làm & Nghề nghiệp** (hạng `r rank_of("Giáo dục, Việc làm & Nghề nghiệp")`/8, chiếm `r share_of("Giáo dục, Việc làm & Nghề nghiệp")`%) nổi bật với `r grp_edu$Variable[1]` (`r sign_txt(grp_edu$Beta_std[1])`), cho thấy tỷ lệ thất nghiệp/trình độ học vấn thấp có liên hệ cùng chiều với tội phạm — phù hợp với vai trò của việc làm ổn định như một kênh gắn kết cá nhân với các chuẩn mực xã hội thông thường.
+
+**Nhóm Nhà ở: Loại hình, Sở hữu & Chi phí** (hạng `r rank_of("Nhà ở: Loại hình, Sở hữu & Chi phí")`/8, chiếm `r share_of("Nhà ở: Loại hình, Sở hữu & Chi phí")`%) tuy có số biến nhiều nhất trong 8 nhóm nhưng ảnh hưởng của từng biến khá phân tán; biến nổi bật nhất là `r grp_housing$Variable[1]` (`r sign_txt(grp_housing$Beta_std[1])`), liên quan đến mật độ cư trú/sở hữu nhà — phản ánh gián tiếp mức sống và độ ổn định nơi ở của cộng đồng.
+
+**Nhóm Nhập cư, Ổn định Dân cư & Vô gia cư** (hạng `r rank_of("Nhập cư, Ổn định Dân cư & Vô gia cư")`/8, chiếm `r share_of("Nhập cư, Ổn định Dân cư & Vô gia cư")`%) có đại diện lớn nhất là `r grp_immig$Variable[1]` (`r sign_txt(grp_immig$Beta_std[1])`). Mức ảnh hưởng của nhóm này nhìn chung yếu hơn nhóm kinh tế — gia đình, khớp với tương quan PC–Y yếu đã ghi nhận ở PC2/PC4 tại mục phân tích ma trận tải.
+
+`r if (nrow(grp_police) == 0) "**Nhóm Cảnh sát & Thực thi Pháp luật (LEMAS)** không còn biến nào trong tập dữ liệu cuối cùng do toàn bộ 23 biến của nhóm đã bị loại ở bước xử lý dữ liệu khuyết (khuyết ~84%, mang tính hệ thống theo thiết kế khảo sát LEMAS) — vì vậy không có cơ sở dữ liệu để đánh giá ảnh hưởng của hoạt động cảnh sát đến tỷ lệ tội phạm trong mô hình này." else paste0("**Nhóm Cảnh sát & Thực thi Pháp luật (LEMAS)** chỉ còn ", nrow(grp_police), " biến sau bước loại 22/23 biến khuyết dữ liệu (mục Xử Lý Dữ Liệu Khuyết) — đại diện duy nhất là ", grp_police$Variable[1], " (", sign_txt(grp_police$Beta_std[1]), "). Vì chỉ còn một biến đại diện, kết quả này không đủ cơ sở để khái quát hóa cho toàn bộ hoạt động thực thi pháp luật; đồng thời cần lưu ý khả năng quan hệ nhân quả ngược trong nhóm này — quy mô/ngân sách lực lượng cảnh sát thường được các địa phương điều chỉnh theo tỷ lệ tội phạm đã xảy ra, thay vì chỉ tác động một chiều đến tội phạm.")`
+
+Tổng hợp lại, hai nhóm **kinh tế (thu nhập, nghèo đói)** và **cấu trúc gia đình — xã hội** chi phối phần lớn khả năng dự báo của PCR; các nhóm còn lại chỉ đóng vai trò bổ sung. Do PCR ước lượng trong không gian con $m=`r n_cv_onesigma`$ chiều (thay vì đầy đủ $p=`r ncol(pca_model$rotation)\`\$), các hệ số $\beta_j$ chỉ phản ánh liên hệ thống kê trên dữ liệu cắt ngang, không hàm ý quan hệ nhân quả.
+
+# Thảo Luận Ưu Điểm, Hạn Chế Của PCR, OLS, Ridge, LASSO Và Đề Xuất Mô Hình Phù Hợp
+
+## Bối cảnh dữ liệu: nhiều biến và đa cộng tuyến nghiêm trọng
+
+Bộ dữ liệu sử dụng $p=`r n_var_full`$ biến dự báo trên $n=`r nrow(train_df)`$ quan sát tập train — tỷ lệ $n/p\approx `r round(nrow(train_df)/n_var_full,1)`$ không quá nhỏ, nhưng các chỉ số đã tính ở phần đầu bài cho thấy mức độ đa cộng tuyến giữa các biến dự báo là rất nghiêm trọng: Condition Number của ma trận tương quan xấp xỉ `r format(round(cond_number,0), big.mark=",")` (vượt xa ngưỡng cảnh báo kinh nghiệm là 30), có tới `r n_pairs_09` cặp biến tương quan tuyệt đối trên 0,9, và VIF của mô hình OLS đầy đủ đạt trung bình `r round(mean(vif_full_ols),1)`, tối đa lên tới `r round(max(vif_full_ols),0)` (biến `r names(which.max(vif_full_ols))`). Đây chính là bối cảnh điển hình mà bốn phương pháp OLS, PCR, Ridge và LASSO thể hiện những ưu, nhược điểm rất khác nhau.
+
+## So sánh ưu điểm và hạn chế từng phương pháp
+
+```{r part-h-summary-table, echo=TRUE}
+pros_cons <- tibble::tribble(
+  ~Mo_hinh, ~Uu_diem, ~Han_che,
+  "OLS (đầy đủ / Stepwise AIC)",
+  "Dễ hiểu, dễ triển khai; hệ số có ý nghĩa \"giữ nguyên các biến khác\" trực tiếp; có nền tảng kiểm định giả thuyết cổ điển (t-test, F-test) khi các giả định BLUE thỏa mãn.",
+  "Khi đa cộng tuyến cao: hệ số không ổn định (dấu/độ lớn đổi mạnh khi thêm/bớt biến tương quan), sai số chuẩn bị thổi phồng, dễ NA/không ước lượng được khi cộng tuyến hoàn hảo. Stepwise chỉ loại bớt biến dư thừa \"có thể loại mà AIC không đổi nhiều\", không giải quyết triệt để các cụm biến trùng khái niệm (ví dụ cụm ly hôn, VIF vẫn rất cao sau stepwise). Tối ưu hóa theo AIC là tiêu chí trong mẫu, không trực tiếp tối ưu khả năng tổng quát hóa.",
+  "PCR",
+  "Thành phần chính trực giao nên loại bỏ hoàn toàn đa cộng tuyến giữa các biến đưa vào mô hình (VIF = 1); giảm mạnh số chiều (từ 100 biến còn 16 PC) nhưng vẫn giữ phần lớn thông tin dự báo; ổn định hơn OLS khi có nhiều biến tương quan cao; có thể quy đổi ngược về không gian biến gốc để diễn giải (mục (g)).",
+  "PCA xây dựng trục chỉ dựa trên phương sai của X, không dùng thông tin của Y, nên PC mang nhiều phương sai X chưa chắc liên hệ mạnh với Y (và ngược lại); hệ số sau quy đổi không tương đương hệ số hồi quy đầy đủ (chỉ là xấp xỉ hạng thấp — mục (g)); vẫn dùng toàn bộ 100 biến gốc (loading hiếm khi bằng 0) nên không thực hiện chọn biến/giảm số biến cần thu thập.",
+  "Ridge Regression",
+  "Xử lý trực tiếp đa cộng tuyến bằng cách cộng thêm $\\lambda I$ trước khi nghịch đảo $X^\\top X$, giúp ước lượng ổn định ngay cả khi các biến tương quan rất cao hoặc gần suy biến; co rút đồng loạt toàn bộ hệ số nên phù hợp khi tín hiệu thực sự \"trải đều\" trên nhiều biến cùng đóng góp nhỏ; thường cho hiệu năng dự báo tốt trong bối cảnh này.",
+  "Không bao giờ đưa hệ số về đúng 0 nên không thực hiện chọn biến, giữ nguyên toàn bộ 100 biến — khó rút gọn mô hình cho mục đích diễn giải/thu thập dữ liệu tối giản; cần chọn $\\lambda$ bằng cross-validation; hệ số bị chệch (biased) có chủ đích để đổi lấy phương sai thấp hơn (đánh đổi bias-variance).",
+  "LASSO",
+  "Phạt $L_1$ có khả năng đưa hệ số về đúng 0, thực hiện chọn biến tự động — mô hình gọn hơn, dễ diễn giải và dễ triển khai trong thực tế (ít biến cần thu thập); hiệu năng dự báo thường gần với Ridge.",
+  "Khi các biến tương quan cao theo cụm, LASSO có xu hướng chỉ chọn ngẫu nhiên một đại diện trong cụm và loại các biến còn lại (thiếu \"hiệu ứng nhóm\" — grouping effect), khiến biến bị chọn/loại có thể không ổn định giữa các mẫu dữ liệu khác nhau; cũng cần chọn $\\lambda$ bằng cross-validation; khi tín hiệu thực sự trải đều trên nhiều biến (không thưa), LASSO có thể kém hơn Ridge."
+)
+
+kable(
+  pros_cons,
+  col.names = c("Mô hình", "Ưu điểm chính", "Hạn chế chính"),
+  caption = "So Sánh Ưu Điểm Và Hạn Chế Của OLS, PCR, Ridge Và LASSO Trong Bối Cảnh Nhiều Biến, Đa Cộng Tuyến",
+  escape = FALSE
+) %>%
+  kable_styling(bootstrap_options = c("striped", "hover")) %>%
+  column_spec(1, bold = TRUE, width = "12%") %>%
+  column_spec(2:3, width = "44%")
+```
+
+**Về mặt lý thuyết**, PCR, Ridge và LASSO đều xử lý cùng một vấn đề gốc — ma trận $X^\top X$ gần suy biến khiến nghiệm OLS không ổn định — nhưng theo cơ chế khác nhau: PCR bỏ hẳn các hướng phương sai nhỏ trước khi hồi quy; Ridge co rút đồng loạt qua số hạng phạt $\lambda I$; LASSO co rút và có thể đưa hệ số về đúng 0 (phạt $L_1$). Cả ba đều ổn định hơn OLS "thô" trong bối cảnh đa cộng tuyến nghiêm trọng.
+
+**Về mặt thực nghiệm**, `r selected_model` đạt RMSE validation thấp nhất (`r round(model_compare_valid$RMSE[model_compare_valid$Model == selected_model],4)`), các phương án còn lại chênh lệch không lớn — phù hợp lý thuyết: tín hiệu trải đều trên nhiều biến (không thưa) nên co rút đồng loạt (Ridge) hiệu quả hơn chọn biến cứng hay giảm chiều không giám sát. Ngoài ra, OLS Stepwise và PCR đều vi phạm giả định tuyến tính (RESET, p `r format.pval(reset_result$P_value[reset_result$Mo_hinh == "OLS (Stepwise AIC)"], digits = 3, eps = 2.2e-16)`) và phương sai không đổi (Breusch–Pagan, p `r format.pval(bp_result$P_value[bp_result$Mo_hinh == "OLS (Stepwise AIC)"], digits = 3, eps = 2.2e-16)`), nên kiểm định ý nghĩa thống kê cổ điển của OLS Stepwise không còn đáng tin cậy.
+
+## Đề xuất mô hình phù hợp nhất
+
+Không có một mô hình duy nhất tối ưu cho mọi mục tiêu; lựa chọn phù hợp phụ thuộc vào việc ưu tiên **độ chính xác dự báo** hay **khả năng diễn giải/rút gọn số biến**:
+
+- **Ưu tiên độ chính xác dự báo:** **Ridge Regression** — RMSE, MAE thấp nhất, $R^2$ cao nhất trên validation, phù hợp cấu trúc "nhiều biến cùng đóng góp nhỏ, tương quan cao" của dữ liệu.
+- **Ưu tiên diễn giải/rút gọn số biến:** **LASSO** — hiệu năng gần Ridge (`r round(model_compare_valid$RMSE[model_compare_valid$Model == "LASSO"],4)` so với `r round(model_compare_valid$RMSE[model_compare_valid$Model == "Ridge"],4)`) nhưng chỉ giữ `r n_nonzero`/`r n_var_full` biến, dễ trình bày hơn.
+- **Khám phá cấu trúc dữ liệu:** **PCR** — nhận diện các "trục nội dung" tiềm ẩn (mục (g)), hiệu năng khá gần Ridge/LASSO dù chỉ dùng `r n_cv_onesigma` thành phần, nhưng không phù hợp nếu cần diễn giải riêng lẻ từng biến gốc do bản chất giảm chiều không giám sát.
+- **OLS (đầy đủ/Stepwise)** chỉ nên là mô hình tham khảo: hiệu năng kém nhất và vi phạm nhiều giả định BLUE nên suy diễn thống kê cổ điển không còn đáng tin cậy.
+
+Tổng hợp lại, **Ridge Regression** là mô hình chính phù hợp nhất cho bài toán này; LASSO và PCR là phương án bổ trợ khi cần ưu tiên diễn giải.

@@ -185,14 +185,7 @@ Cụ thể, phân tích xác định chiều và mức độ ảnh hưởng củ
 # để không bị lỗi "cannot open the connection" chỉ vì lệch tên file hoặc cấu
 # trúc thư mục giữa các máy.
 csv_candidates <- c(
-  "../data/raw/ds_salaries.csv",
-  "../data/raw/ds-salaries.csv",
-  "data/raw/ds_salaries.csv",
-  "data/raw/ds-salaries.csv",
-  "../ds_salaries.csv",
-  "../ds-salaries.csv",
-  "ds_salaries.csv",
-  "ds-salaries.csv"
+  "../data/raw/ds_salaries.csv"
 )
 csv_found <- csv_candidates[file.exists(csv_candidates)]
 
